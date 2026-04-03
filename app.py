@@ -1,14 +1,12 @@
 import streamlit as st
 from datetime import datetime
-import google.generativeai as genai
+import requests
+import json
 
-# --- 1. API CONNECT (THE STABILITY FIX) ---
-try:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # Switching to 'gemini-pro' - the most widely supported stable name across all API versions
-    model = genai.GenerativeModel('gemini-pro')
-except Exception as e:
-    st.error(f"API Setup Error: {e}")
+# --- 1. API SETUP ---
+# We use a direct web request (REST) to bypass the 'v1beta' 404 error
+API_KEY = st.secrets["GEMINI_API_KEY"]
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -67,20 +65,27 @@ elif st.session_state.page == 'input':
     if st.button("GET FORECAST"):
         with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
-                # Targeted prompt for the Saturday test
-                prompt = (f"Act as a professional sailing weather expert. Provide a "
-                          f"detailed sailing weather brief for the Potomac River (DCA) on {sel_date}. "
-                          "Include: Wind speed/direction, Gusts, Temp, Precipitation %, Thunder risk, "
-                          "River Flow in cfs, and the next two Tides. "
-                          "Format with clear headings. "
-                          "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")
+                payload = {
+                    "contents": [{
+                        "parts": [{
+                            "text": (f"Provide a sailing weather brief for Potomac River (DCA) on {sel_date}. "
+                                     "Include: Wind mph/direction, Gusts, Temp, Precip %, Thunder risk, "
+                                     "River Flow cfs, and next two Tides. Format with clear headings. "
+                                     "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")
+                        }]
+                    }]
+                }
                 
-                response = model.generate_content(prompt)
-                st.session_state.weather_data = response.text
+                response = requests.post(API_URL, json=payload)
+                result = response.json()
+                
+                # Extract the text from the JSON response
+                st.session_state.weather_data = result['candidates']['content']['parts']['text']
                 st.session_state.page = 'dashboard'
                 st.rerun()
+                
             except Exception as e:
-                st.error(f"Data Fetch Failed: {e}. Ensure your API Key is active in Google AI Studio.")
+                st.error(f"Connection Failed: {e}. If you see a key error, check AI Studio permissions.")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
