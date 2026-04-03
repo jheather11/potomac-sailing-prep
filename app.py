@@ -35,7 +35,7 @@ if st.session_state.page == 'home':
         
     st.button("CRUISER - ANNAPOLIS (BETA)", disabled=True)
 
-# --- SCREEN 2: HARD GATE ---
+# --- SCREEN 2: LOGISTICS CHECK ---
 elif st.session_state.page == 'gate':
     st.title(f"Logistics Check: {st.session_state.boat}")
     st.info("Check official SCOW sources before proceeding.")
@@ -46,7 +46,7 @@ elif st.session_state.page == 'gate':
     c2 = st.checkbox("I have confirmed my Reservation Time Slot.")
     c3 = st.checkbox("I have reviewed Weather/Nav links on the SCOW homepage.")
     
-    if st.button("PROCEED TO MISSION PARAMETERS"):
+    if st.button("PROCEED TO FLOAT PLAN"):
         if c1 and c2 and c3:
             st.session_state.page = 'input'
             st.rerun()
@@ -57,9 +57,9 @@ elif st.session_state.page == 'gate':
         st.session_state.page = 'home'
         st.rerun()
 
-# --- SCREEN 3: INPUT ---
+# --- SCREEN 3: FLOAT PLAN INPUT ---
 elif st.session_state.page == 'input':
-    st.title("Mission Parameters")
+    st.title("Float Plan")
     st.date_input("Date", datetime.now())
     st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
     st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
@@ -68,36 +68,41 @@ elif st.session_state.page == 'input':
         st.session_state.page = 'dashboard'
         st.rerun()
 
-# --- SCREEN 4: DASHBOARD ---
+# --- SCREEN 4: DASHBOARD (Updated for April 5 Forecast) ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
-    st.success("STATUS: GO")
+    st.warning("STATUS: CAUTION - SHOWERS LIKELY")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("WIND", "14-16 (G24) S-SW")
-        st.metric("TEMP", "78°-82°F")
-        st.metric("TIDE 1", "4:59 PM (Low)", "OUTGOING")
-    with col2:
-        st.metric("FLOW", "9,780 cfs", "-38% (LOW)")
-        st.metric("PRECIP", "15% / None")
-        st.metric("TIDE 2", "10:15 PM (High)", "INCOMING")
+    # Custom Dashboard Table
+    st.markdown(f"""
+    | Metric | Forecast / Live Data (APR 5) | Status |
+    | :--- | :--- | :--- |
+    | **WIND** | 10–18 mph (Gust 28) S | **GO** ✅ |
+    | **TEMP** | High near 74°F | **WARM** |
+    | **PRECIP** | 100% / Showers Likely | **WET** |
+    | **THUNDER** | NONE | **SAFE** |
+    | **FLOW** | 10,200 cfs (35% below Avg) | **LOW** |
+    | **TIDE 1** | 6:15 PM: 2.8 ft (High) | **INCOMING** |
+    | **TIDE 2** | 12:45 PM: 0.1 ft (Low) | **OUTGOING** |
+    """)
 
     st.divider()
     st.subheader("Considerations")
     
-    # Wind logic for Considerations
     with st.expander("🛡️ SAFETY & LIMITS", expanded=True):
-        if st.session_state.boat == "Cruiser":
-            st.write("• Gusts at 24 mph: **Consider Reefing**.")
-        st.write("• Flow is 38% below average (LOW).")
+        st.write("• Wind: Gusts up to **28 mph**. For Cruisers, **Consider Reefing**.")
+        if st.session_state.boat == "Flying Scot":
+            st.error("• WARNING: Gusts (28 mph) exceed Flying Scot limit (19 mph).")
+        st.write("• Showers: 100% chance of rain. Check for visibility drops.")
         
     with st.expander("🧭 NAVIGATION"):
-        st.write("• Tide dropping to 0.08ft. Watch depth at Marina entrance.")
-        st.write("• Wind against Tide: Expect steep surface chop.")
+        st.write("• Tide: Strong **INCOMING** flood current for your entire afternoon sail.")
+        st.write("• Wind Strategy: Steady South wind will build surface chop against the outgoing river flow.")
     
     if st.button("SHARE WITH CREW"):
-        st.info("Briefing copied to clipboard (Simulated)")
+        share_text = f"⛵ {st.session_state.boat} Float Plan: CAUTION\nWind: 10-18 (G28) S\nTide: High 6:15 PM (Incoming)\nPrecip: 100% Rain\nNote: Gusty day, bring foul weather gear!"
+        st.code(share_text, language="text")
+        st.info("Copy the text above to share with your crew.")
     
     if st.button("START OVER"):
         st.session_state.page = 'home'
