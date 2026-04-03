@@ -6,7 +6,7 @@ import google.generativeai as genai
 # This looks for the "Secret" you saved in Streamlit Cloud
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-1.5-flash')
+   model = genai.GenerativeModel('gemini-1.5-flash-latest')
 except Exception as e:
     st.error("API Key Error: Make sure GEMINI_API_KEY is in Streamlit Secrets.")
 
