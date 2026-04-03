@@ -3,12 +3,11 @@ from datetime import datetime
 import google.generativeai as genai
 
 # --- 1. API CONNECT ---
-# This looks for the "Secret" you saved in Streamlit Cloud
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-   model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
 except Exception as e:
-    st.error("API Key Error: Make sure GEMINI_API_KEY is in Streamlit Secrets.")
+    st.error("API Key Error: Check Streamlit Secrets.")
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -46,13 +45,10 @@ elif st.session_state.page == 'gate':
     c1 = st.checkbox("Reviewed Maintenance Notes.")
     c2 = st.checkbox("Confirmed Reservation Slot.")
     c3 = st.checkbox("Reviewed SCOW Weather/Nav links.")
-    
     if st.button("PROCEED TO FLOAT PLAN"):
         if c1 and c2 and c3:
             st.session_state.page = 'input'
             st.rerun()
-        else:
-            st.error("Please check all boxes to proceed.")
 
 # --- SCREEN 3: FLOAT PLAN INPUT ---
 elif st.session_state.page == 'input':
@@ -60,16 +56,12 @@ elif st.session_state.page == 'input':
     sel_date = st.date_input("Select Date", datetime.now())
     st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
     st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
-    
-    # THIS IS THE BUTTON THAT TRIGGERS THE LIVE DATA
     if st.button("GET LIVE CONDITIONS"):
         with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
-                # The AI Prompt
                 prompt = (f"Provide a sailing weather brief for Potomac River (DCA) on {sel_date}. "
                           "Include: Wind mph/direction, Gusts, Temp, Precip, Thunder risk, "
                           "River Flow cfs, and next two Tides. Format with clear headings.")
-                
                 response = model.generate_content(prompt)
                 st.session_state.weather_data = response.text
                 st.session_state.page = 'dashboard'
@@ -80,18 +72,9 @@ elif st.session_state.page == 'input':
 # --- SCREEN 4: LIVE DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
-    st.success("LIVE DATA RETRIEVED")
-    
-    # Display the AI-generated brief
     st.markdown("### 📡 Skipper's Briefing")
     st.write(st.session_state.weather_data)
-    
     st.divider()
-    
-    if st.button("SHARE WITH CREW"):
-        st.code(st.session_state.weather_data, language="text")
-        st.info("Copy text above for your crew chat.")
-
     if st.button("START OVER"):
         st.session_state.page = 'home'
         st.rerun()
