@@ -5,7 +5,7 @@ import google.generativeai as genai
 # --- 1. API CONNECT (THE STABILITY FIX) ---
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # Switching to 'gemini-pro' - the most widely supported stable name
+    # Switching to 'gemini-pro' - the most widely supported stable name across all API versions
     model = genai.GenerativeModel('gemini-pro')
 except Exception as e:
     st.error(f"API Setup Error: {e}")
@@ -67,13 +67,13 @@ elif st.session_state.page == 'input':
     if st.button("GET FORECAST"):
         with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
-                # Optimized prompt for the Saturday test
-                prompt = (f"Act as a sailing weather expert. Search for and provide a "
+                # Targeted prompt for the Saturday test
+                prompt = (f"Act as a professional sailing weather expert. Provide a "
                           f"detailed sailing weather brief for the Potomac River (DCA) on {sel_date}. "
                           "Include: Wind speed/direction, Gusts, Temp, Precipitation %, Thunder risk, "
                           "River Flow in cfs, and the next two Tides. "
-                          "Format with clear Markdown headings. "
-                          "Add a 'Skipper's Recommendation' for a Flying Scott vs a Cruiser.")
+                          "Format with clear headings. "
+                          "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")
                 
                 response = model.generate_content(prompt)
                 st.session_state.weather_data = response.text
