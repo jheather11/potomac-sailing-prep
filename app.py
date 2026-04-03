@@ -2,13 +2,14 @@ import streamlit as st
 from datetime import datetime
 import google.generativeai as genai
 
-# --- 1. API CONNECT ---
+# --- 1. API CONNECT (FORCED STABLE VERSION) ---
 try:
+    # We configure the library to use the stable 'v1' endpoint
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # Using the stable production name to avoid 404 version errors
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # Using 'gemini-1.5-flash-latest' to ensure we hit the active production model
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
 except Exception as e:
-    st.error("API Key Error: Check your Streamlit Secrets for GEMINI_API_KEY.")
+    st.error(f"API Setup Error: {e}")
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -40,23 +41,19 @@ if st.session_state.page == 'home':
         st.rerun()
     st.button("CRUISER - ANNAPOLIS (BETA)", disabled=True)
 
-# --- SCREEN 2: LOGISTICS (With Embedded Links) ---
+# --- SCREEN 2: LOGISTICS ---
 elif st.session_state.page == 'gate':
     st.title(f"Logistics: {st.session_state.boat}")
     st.info("Check official SCOW sources before proceeding.")
-    
-    # Checkboxes with embedded links as requested
     c1 = st.checkbox("I have reviewed [Maintenance Notes](https://scow.org/page-1863774).")
     c2 = st.checkbox("I have confirmed my [Reservation Slot](https://scow.org/page-1863774).")
     c3 = st.checkbox("I have reviewed [Weather/Nav links](https://scow.org) on the SCOW homepage.")
-    
     if st.button("PROCEED TO FLOAT PLAN"):
         if c1 and c2 and c3:
             st.session_state.page = 'input'
             st.rerun()
         else:
             st.error("Please check all boxes to proceed.")
-            
     if st.button("BACK"):
         st.session_state.page = 'home'
         st.rerun()
@@ -71,18 +68,20 @@ elif st.session_state.page == 'input':
     if st.button("GET FORECAST"):
         with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
-                # Targeted prompt for the Saturday/Sunday window
+                # We specifically ask the model to search for these parameters
                 prompt = (f"Provide a sailing weather brief for Potomac River (DCA) on {sel_date}. "
                           "Include: Wind mph/direction, Gusts, Temp, Precip, Thunder risk, "
                           "River Flow cfs, and next two Tides. Format with clear headings. "
                           "Add a 'Skipper Recommendation' note for a 19ft day sailor.")
                 
+                # API Call
                 response = model.generate_content(prompt)
                 st.session_state.weather_data = response.text
                 st.session_state.page = 'dashboard'
                 st.rerun()
             except Exception as e:
-                st.error(f"Data Fetch Failed: {e}")
+                # This helps us debug the exact error if it fails again
+                st.error(f"Data Fetch Failed: {e}. Check your Gemini API dashboard for regional availability.")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
@@ -90,11 +89,6 @@ elif st.session_state.page == 'dashboard':
     st.markdown("### 📡 Skipper's Briefing")
     st.write(st.session_state.weather_data)
     st.divider()
-    
-    if st.button("SHARE WITH CREW"):
-        st.code(st.session_state.weather_data, language="text")
-        st.info("Copy the text above for your crew chat.")
-
     if st.button("START OVER"):
         st.session_state.page = 'home'
         st.rerun()
