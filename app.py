@@ -1,5 +1,4 @@
 import streamlit as st
-import pandas as pd
 from datetime import datetime
 
 # --- APP CONFIG ---
@@ -13,27 +12,32 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- SCREEN 1: HOME ---
+# --- INITIALIZE STATE ---
 if 'page' not in st.session_state:
     st.session_state.page = 'home'
+if 'boat' not in st.session_state:
+    st.session_state.boat = None
 
-def change_page(name):
-    st.session_state.page = name
-
+# --- SCREEN 1: HOME ---
 if st.session_state.page == 'home':
     st.title("⛵ Potomac Sail Prep (DCA)")
     st.subheader("Select Your Craft")
+    
     if st.button("FLYING SCOT - POTOMAC"):
         st.session_state.boat = "Flying Scot"
-        change_page('gate')
+        st.session_state.page = 'gate'
+        st.rerun()
+        
     if st.button("CRUISER - POTOMAC"):
         st.session_state.boat = "Cruiser"
-        change_page('gate')
+        st.session_state.page = 'gate'
+        st.rerun()
+        
     st.button("CRUISER - ANNAPOLIS (BETA)", disabled=True)
 
 # --- SCREEN 2: HARD GATE ---
 elif st.session_state.page == 'gate':
-    st.title("Logistics Check")
+    st.title(f"Logistics Check: {st.session_state.boat}")
     st.info("Check official SCOW sources before proceeding.")
     st.markdown("[Open SCOW Reservations](https://www.scow.org/page-1863774)")
     st.markdown("[Open SCOW Weather & Nav](https://www.scow.org)")
@@ -44,26 +48,31 @@ elif st.session_state.page == 'gate':
     
     if st.button("PROCEED TO MISSION PARAMETERS"):
         if c1 and c2 and c3:
-            change_page('input')
+            st.session_state.page = 'input'
+            st.rerun()
         else:
             st.error("Please check all boxes to proceed.")
+    
+    if st.button("BACK"):
+        st.session_state.page = 'home'
+        st.rerun()
 
 # --- SCREEN 3: INPUT ---
 elif st.session_state.page == 'input':
     st.title("Mission Parameters")
-    date = st.date_input("Date", datetime.now())
-    start = st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
-    end = st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
+    st.date_input("Date", datetime.now())
+    st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
+    st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
     
     if st.button("CALCULATE CONDITIONS"):
-        change_page('dashboard')
+        st.session_state.page = 'dashboard'
+        st.rerun()
 
-# --- SCREEN 4: DASHBOARD (BETA SIMULATION) ---
+# --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
-    st.title("Dashboard")
+    st.title(f"Dashboard: {st.session_state.boat}")
     st.success("STATUS: GO")
     
-    # Mock Data for Beta Testing
     col1, col2 = st.columns(2)
     with col1:
         st.metric("WIND", "14-16 (G24) S-SW")
@@ -76,15 +85,20 @@ elif st.session_state.page == 'dashboard':
 
     st.divider()
     st.subheader("Considerations")
+    
+    # Wind logic for Considerations
     with st.expander("🛡️ SAFETY & LIMITS", expanded=True):
-        st.write("• Gusts at 24 mph: **Consider Reefing**.")
+        if st.session_state.boat == "Cruiser":
+            st.write("• Gusts at 24 mph: **Consider Reefing**.")
         st.write("• Flow is 38% below average (LOW).")
+        
     with st.expander("🧭 NAVIGATION"):
-        st.write("• Tide dropping to 0.08ft. Watch depth at Marina.")
-        st.write("• Wind against Tide: Expect building chop.")
+        st.write("• Tide dropping to 0.08ft. Watch depth at Marina entrance.")
+        st.write("• Wind against Tide: Expect steep surface chop.")
     
     if st.button("SHARE WITH CREW"):
         st.info("Briefing copied to clipboard (Simulated)")
     
     if st.button("START OVER"):
-        change_page('home')
+        st.session_state.page = 'home'
+        st.rerun()
