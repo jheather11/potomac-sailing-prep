@@ -11,7 +11,7 @@ st.markdown("""
     .main { background-color: #f0f2f6; }
     .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #004466; color: white; }
     </style>
-    """, unsafe_content_html=True)
+    """, unsafe_allow_html=True)
 
 # --- SCREEN 1: HOME ---
 if 'page' not in st.session_state:
