@@ -2,13 +2,13 @@ import streamlit as st
 from datetime import datetime
 import google.generativeai as genai
 
-# --- 1. API CONNECT (Updated to Stable v1) ---
+# --- 1. API CONNECT ---
 try:
-    # Explicitly setting the model to the stable version
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    # Using the stable production name to avoid 404 version errors
     model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
-    st.error("API Key Error: Check Streamlit Secrets.")
+    st.error("API Key Error: Check your Streamlit Secrets for GEMINI_API_KEY.")
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -26,7 +26,7 @@ if 'boat' not in st.session_state:
 if 'weather_data' not in st.session_state:
     st.session_state.weather_data = ""
 
-# --- SCREEN 1: HOME (Updated Names & Annapolis Button) ---
+# --- SCREEN 1: HOME ---
 if st.session_state.page == 'home':
     st.title("⛵ Potomac Sail Prep (DCA)")
     st.subheader("Select Your Craft")
@@ -40,12 +40,12 @@ if st.session_state.page == 'home':
         st.rerun()
     st.button("CRUISER - ANNAPOLIS (BETA)", disabled=True)
 
-# --- SCREEN 2: LOGISTICS (Embedded Links) ---
+# --- SCREEN 2: LOGISTICS (With Embedded Links) ---
 elif st.session_state.page == 'gate':
     st.title(f"Logistics: {st.session_state.boat}")
     st.info("Check official SCOW sources before proceeding.")
     
-    # Checkboxes with embedded links
+    # Checkboxes with embedded links as requested
     c1 = st.checkbox("I have reviewed [Maintenance Notes](https://scow.org/page-1863774).")
     c2 = st.checkbox("I have confirmed my [Reservation Slot](https://scow.org/page-1863774).")
     c3 = st.checkbox("I have reviewed [Weather/Nav links](https://scow.org) on the SCOW homepage.")
@@ -56,11 +56,12 @@ elif st.session_state.page == 'gate':
             st.rerun()
         else:
             st.error("Please check all boxes to proceed.")
+            
     if st.button("BACK"):
         st.session_state.page = 'home'
         st.rerun()
 
-# --- SCREEN 3: FLOAT PLAN INPUT (Updated Button Text) ---
+# --- SCREEN 3: FLOAT PLAN INPUT ---
 elif st.session_state.page == 'input':
     st.title("Float Plan")
     sel_date = st.date_input("Select Date", datetime.now())
@@ -70,16 +71,18 @@ elif st.session_state.page == 'input':
     if st.button("GET FORECAST"):
         with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
+                # Targeted prompt for the Saturday/Sunday window
                 prompt = (f"Provide a sailing weather brief for Potomac River (DCA) on {sel_date}. "
                           "Include: Wind mph/direction, Gusts, Temp, Precip, Thunder risk, "
-                          "River Flow cfs, and next two Tides. Format with clear headings.")
-                # We use the 'v1' stable API version call
+                          "River Flow cfs, and next two Tides. Format with clear headings. "
+                          "Add a 'Skipper Recommendation' note for a 19ft day sailor.")
+                
                 response = model.generate_content(prompt)
                 st.session_state.weather_data = response.text
                 st.session_state.page = 'dashboard'
                 st.rerun()
             except Exception as e:
-                st.error(f"Data Fetch Failed: {e}. Try checking your API key permissions.")
+                st.error(f"Data Fetch Failed: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
@@ -87,6 +90,11 @@ elif st.session_state.page == 'dashboard':
     st.markdown("### 📡 Skipper's Briefing")
     st.write(st.session_state.weather_data)
     st.divider()
+    
+    if st.button("SHARE WITH CREW"):
+        st.code(st.session_state.weather_data, language="text")
+        st.info("Copy the text above for your crew chat.")
+
     if st.button("START OVER"):
         st.session_state.page = 'home'
         st.rerun()
