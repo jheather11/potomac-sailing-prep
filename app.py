@@ -2,12 +2,11 @@ import streamlit as st
 from datetime import datetime
 import google.generativeai as genai
 
-# --- 1. API CONNECT (FORCED STABLE VERSION) ---
+# --- 1. API CONNECT (THE STABILITY FIX) ---
 try:
-    # We configure the library to use the stable 'v1' endpoint
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    # Using 'gemini-1.5-flash-latest' to ensure we hit the active production model
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    # Switching to 'gemini-pro' - the most widely supported stable name
+    model = genai.GenerativeModel('gemini-pro')
 except Exception as e:
     st.error(f"API Setup Error: {e}")
 
@@ -68,20 +67,20 @@ elif st.session_state.page == 'input':
     if st.button("GET FORECAST"):
         with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
-                # We specifically ask the model to search for these parameters
-                prompt = (f"Provide a sailing weather brief for Potomac River (DCA) on {sel_date}. "
-                          "Include: Wind mph/direction, Gusts, Temp, Precip, Thunder risk, "
-                          "River Flow cfs, and next two Tides. Format with clear headings. "
-                          "Add a 'Skipper Recommendation' note for a 19ft day sailor.")
+                # Optimized prompt for the Saturday test
+                prompt = (f"Act as a sailing weather expert. Search for and provide a "
+                          f"detailed sailing weather brief for the Potomac River (DCA) on {sel_date}. "
+                          "Include: Wind speed/direction, Gusts, Temp, Precipitation %, Thunder risk, "
+                          "River Flow in cfs, and the next two Tides. "
+                          "Format with clear Markdown headings. "
+                          "Add a 'Skipper's Recommendation' for a Flying Scott vs a Cruiser.")
                 
-                # API Call
                 response = model.generate_content(prompt)
                 st.session_state.weather_data = response.text
                 st.session_state.page = 'dashboard'
                 st.rerun()
             except Exception as e:
-                # This helps us debug the exact error if it fails again
-                st.error(f"Data Fetch Failed: {e}. Check your Gemini API dashboard for regional availability.")
+                st.error(f"Data Fetch Failed: {e}. Ensure your API Key is active in Google AI Studio.")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
