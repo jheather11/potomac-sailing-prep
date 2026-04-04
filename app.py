@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP ---
+# --- 1. API SETUP (THE STABLE PATH) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Using the most reliable production path
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+# Explicitly using the stable v1 path and the flash-8b model for maximum uptime
+API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-8b:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -76,7 +76,7 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload)
                 data = response.json()
                 
-                # --- NEW ROBUST UNPACKING LOGIC ---
+                # --- FINAL ROBUST UNPACKING ---
                 if 'candidates' in data and len(data['candidates']) > 0:
                     candidate = data['candidates']
                     if 'content' in candidate and 'parts' in candidate['content']:
@@ -86,7 +86,7 @@ elif st.session_state.page == 'input':
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error("Unexpected response format from AI. Please try again.")
+                    st.error("AI Busy. Please try 'GET FORECAST' again.")
                     
             except Exception as e:
                 st.error(f"Connection Failed: {e}")
@@ -95,7 +95,7 @@ elif st.session_state.page == 'input':
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
     st.markdown("### 📡 Skipper's Briefing")
-    # Using markdown here so Gemini's bolding/bullet points look professional
+    # Using markdown for beautiful headers and lists
     st.markdown(st.session_state.weather_data)
     st.divider()
     if st.button("START OVER"):
