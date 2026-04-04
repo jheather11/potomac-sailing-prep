@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (THE STABLE PRODUCTION PATH) ---
+# --- 1. API SETUP (2026 STABLE PRODUCTION PATH) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Using the v1 stable endpoint with the explicit models/ prefix
-API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+# Updated to Gemini 2.5 Flash - the production standard for April 2026
+API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -63,9 +63,8 @@ elif st.session_state.page == 'input':
         st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
     
     if st.button("GET FORECAST"):
-        with st.spinner("Gemini is analyzing Potomac conditions..."):
+        with st.spinner("Gemini 2.5 is analyzing Potomac conditions..."):
             try:
-                # We simplified the payload to the absolute bare minimum to avoid errors
                 payload = {
                     "contents": [{"parts": [{"text": (
                         f"Provide a sailing weather brief for Potomac River (DCA) on {sel_date}. "
@@ -76,7 +75,7 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload, timeout=15)
                 data = response.json()
                 
-                # --- ROBUST UNPACKING FOR V1 ---
+                # --- ROBUST UNPACKING FOR 2.5 ---
                 if 'candidates' in data and len(data['candidates']) > 0:
                     candidate = data['candidates']
                     if 'content' in candidate and 'parts' in candidate['content']:
@@ -86,7 +85,7 @@ elif st.session_state.page == 'input':
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error("Connection successful, but no data returned. Try once more!")
+                    st.error("Connection successful, but the AI is playing coy. Try once more!")
             except Exception as e:
                 st.error(f"Processing Error: {e}")
 
