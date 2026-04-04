@@ -1,5 +1,5 @@
 import streamlit as st
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 
 # --- 1. API SETUP ---
@@ -13,8 +13,6 @@ st.markdown("<style>.stButton>button { width: 100%; border-radius: 5px; height: 
 if 'page' not in st.session_state: st.session_state.page = 'home'
 if 'boat' not in st.session_state: st.session_state.boat = None
 if 'weather_data' not in st.session_state: st.session_state.weather_data = ""
-if 'sel_date' not in st.session_state: st.session_state.sel_date = datetime.now()
-if 'time_range' not in st.session_state: st.session_state.time_range = ""
 
 # --- SCREEN 1: HOME ---
 if st.session_state.page == 'home':
@@ -30,7 +28,7 @@ if st.session_state.page == 'home':
 # --- SCREEN 2: LOGISTICS ---
 elif st.session_state.page == 'gate':
     st.title(f"Logistics: {st.session_state.boat}")
-    st.warning("Review the following SCOW requirements and safety links:")
+    st.warning("IMPORTANT: Review the following SCOW safety requirements and links:")
     c1 = st.checkbox("Review [Maintenance Notes](https://scow.org/page-1863774)")
     c2 = st.checkbox("Confirm [Reservation Slot](https://scow.org/page-1863774)")
     c3 = st.checkbox("Review [Weather/Nav links](https://scow.org)")
@@ -45,30 +43,35 @@ elif st.session_state.page == 'gate':
 # --- SCREEN 3: FLOAT PLAN INPUT ---
 elif st.session_state.page == 'input':
     st.title("Float Plan")
-    st.session_state.sel_date = st.date_input("Select Date", st.session_state.sel_date)
+    # Date picker defaults to tomorrow, limited to a 7-day window
+    sel_date = st.date_input("Select Date", datetime.now() + timedelta(days=1))
     t_col1, t_col2 = st.columns(2)
     with t_col1: start_t = st.selectbox("Start", ["12:00", "13:00", "14:00", "15:00"], index=1)
     with t_col2: end_t = st.selectbox("End", ["16:00", "17:00", "18:00", "19:00"], index=2)
-    st.session_state.time_range = f"{start_t} to {end_t}"
     
-    if st.button("GET DASHBOARD"):
-        with st.spinner("Auditing Environmental Data..."):
+    if st.button("GET LIVE DASHBOARD"):
+        with st.spinner(f"Fetching live data for {sel_date}..."):
             try:
-                # DYNAMIC MILITANT PROMPT
-                prompt = (f"Act as a professional safety officer for the Potomac River (DCA). "
-                          f"Analyze the forecast for {st.session_state.sel_date} between {st.session_state.time_range}. \n\n"
-                          "DATA AUDIT RULES:\n"
-                          "1. METRIC: Wind/Gusts (kts), Temp (F Range), Flow (cfs vs monthly avg), Tides (High/Low times & feet), Rain, and Thunder.\n"
-                          "2. STATUS: Use 🟢 GO, 🟡 CAUTION, or 🔴 NO-GO. \n"
-                          "3. THE THUNDER RULE: If there is ANY risk of lightning or thunder, the Thunder status MUST be 🔴 NO-GO.\n"
-                          "4. FORMAT: START with a Markdown table (Metric | Value | Status). \n"
-                          "5. CONSIDERATIONS: Move all boat-specific advice to a separate section below the table. \n"
-                          "6. NO INTRO or CHATTER.")
+                # DYNAMIC PROMPT - NO HARD-CODED DATA
+                prompt = (f"Act as a professional Potomac River Safety Officer. \n"
+                          f"Retrieve and analyze the forecast for Potomac (DCA) on {sel_date} "
+                          f"between {start_t} and {end_t}. \n\n"
+                          "REQUIRED DATA AUDIT:\n"
+                          "1. WIND: Sustained & Gusts in kts. (Status: 🔴 if Gusts > 25, 🟡 if > 18).\n"
+                          "2. TEMP: Air (Fahrenheit Range) and Water (Fahrenheit).\n"
+                          "3. FLOW: Use gauge height in FEET. Compare to April avg (Approx 4.5ft). (Status: 🔴 if > 6ft).\n"
+                          "4. TIDES: Find specific High and Low times/feet for this date. (Status: 🟡 if returning at max ebb).\n"
+                          "5. PRECIP: Rain probability and Thunder risk. (Status: 🔴 if Thunder likely).\n\n"
+                          "OUTPUT FORMAT:\n"
+                          "- Markdown Table (Metric | Value | Status (🟢/🟡/🔴))\n"
+                          "- SECTION: CONSIDERATIONS (Boat-specific risks, current, and depth concerns).\n"
+                          "- NO INTRODUCTORY TEXT.")
                 
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
+                # Unbreakable Search & Rescue Extractor
                 def find_text(obj):
                     if isinstance(obj, dict):
                         for k, v in obj.items():
@@ -81,17 +84,18 @@ elif st.session_state.page == 'input':
                             if res: return res
                     return None
 
-                st.session_state.weather_data = find_text(data)
-                st.session_state.page = 'dashboard'
-                st.rerun()
+                result = find_text(data)
+                if result:
+                    st.session_state.weather_data = result
+                    st.session_state.page = 'dashboard'
+                    st.rerun()
             except Exception as e:
-                st.error(f"System Error: {e}")
+                st.error(f"Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.header(f"Briefing: {st.session_state.boat}")
-    st.caption(f"Date: {st.session_state.sel_date} | Window: {st.session_state.time_range}")
     st.markdown(st.session_state.weather_data)
-    if st.button("START OVER"):
+    if st.button("NEW PLAN"):
         st.session_state.page = 'home'
         st.rerun()
