@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (THE STABLE PATH) ---
+# --- 1. API SETUP (THE STABLE BETA PATH) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Explicitly using the stable v1 path and the flash-8b model for maximum uptime
-API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash-8b:generateContent?key={API_KEY}"
+# Using the v1beta endpoint as it is currently the most reliable for 'Flash' models
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -95,7 +95,6 @@ elif st.session_state.page == 'input':
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
     st.markdown("### 📡 Skipper's Briefing")
-    # Using markdown for beautiful headers and lists
     st.markdown(st.session_state.weather_data)
     st.divider()
     if st.button("START OVER"):
