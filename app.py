@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (UPDATED TO STABLE 2.5 MODEL) ---
+# --- 1. API SETUP ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Using the stable v1 path with the 2.5 Flash model for maximum reliability
-API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={API_KEY}"
+# Using the most reliable production path
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -52,16 +52,15 @@ elif st.session_state.page == 'gate':
         st.session_state.page = 'home'
         st.rerun()
 
-# --- SCREEN 3: FLOAT PLAN INPUT (RE-STABILIZED) ---
+# --- SCREEN 3: FLOAT PLAN INPUT ---
 elif st.session_state.page == 'input':
     st.title("Float Plan")
     sel_date = st.date_input("Select Date", datetime.now())
-    # Time inputs restored
     st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
     st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
     
     if st.button("GET FORECAST"):
-        with st.spinner("Analyzing Potomac conditions..."):
+        with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
                 payload = {
                     "contents": [{
@@ -77,14 +76,17 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload)
                 data = response.json()
                 
-                if 'candidates' in data:
-                    st.session_state.weather_data = data['candidates']['content']['parts']['text']
-                    st.session_state.page = 'dashboard'
-                    st.rerun()
+                # --- NEW ROBUST UNPACKING LOGIC ---
+                if 'candidates' in data and len(data['candidates']) > 0:
+                    candidate = data['candidates']
+                    if 'content' in candidate and 'parts' in candidate['content']:
+                        st.session_state.weather_data = candidate['content']['parts']['text']
+                        st.session_state.page = 'dashboard'
+                        st.rerun()
+                elif 'error' in data:
+                    st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    # If error, show exactly what Google says
-                    err_msg = data.get('error', {}).get('message', 'Unknown API Error.')
-                    st.error(f"API Error: {err_msg}")
+                    st.error("Unexpected response format from AI. Please try again.")
                     
             except Exception as e:
                 st.error(f"Connection Failed: {e}")
@@ -93,7 +95,8 @@ elif st.session_state.page == 'input':
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
     st.markdown("### 📡 Skipper's Briefing")
-    st.write(st.session_state.weather_data)
+    # Using markdown here so Gemini's bolding/bullet points look professional
+    st.markdown(st.session_state.weather_data)
     st.divider()
     if st.button("START OVER"):
         st.session_state.page = 'home'
