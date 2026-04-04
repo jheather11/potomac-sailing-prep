@@ -74,24 +74,24 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload, timeout=15)
                 data = response.json()
                 
-                # --- THE HARD-CODED EXTRACTION ---
-                if 'candidates' in data:
-                    # We manually index the list to avoid the "str" error
-                    candidates_list = data['candidates']
-                    first_candidate = candidates_list
-                    content_dict = first_candidate['content']
-                    parts_list = content_dict['parts']
-                    text_output = parts_list['text']
+                # --- MANUAL PRECISION EXTRACTION ---
+                if 'candidates' in data and isinstance(data['candidates'], list):
+                    # Step 1: Open the 'candidates' list
+                    candidate = data['candidates']
+                    # Step 2: Open the 'content' dictionary
+                    content = candidate['content']
+                    # Step 3: Open the 'parts' list
+                    parts = content['parts']
+                    # Step 4: Grab the 'text' string
+                    text_blob = parts['text']
                     
-                    st.session_state.weather_data = text_output
+                    st.session_state.weather_data = text_blob
                     st.session_state.page = 'dashboard'
                     st.rerun()
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
-                else:
-                    st.error("Connection successful, but response structure was unexpected.")
             except Exception as e:
-                st.error(f"Display Error: {e}")
+                st.error(f"Data Unpacking Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
