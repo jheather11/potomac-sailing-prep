@@ -40,33 +40,36 @@ elif st.session_state.page == 'gate':
 # --- SCREEN 3: FLOAT PLAN INPUT ---
 elif st.session_state.page == 'input':
     st.title("Float Plan")
-    sel_date = st.date_input("Select Date", datetime.now())
-    col1, col2 = st.columns(2)
-    with col1: st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
-    with col2: st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
+    st.date_input("Select Date", datetime.now())
+    
+    # Restored and simplified time layout
+    t_col1, t_col2 = st.columns(2)
+    with t_col1:
+        st.selectbox("Start Time", ["12:00", "13:00", "14:00", "15:00"], index=1)
+    with t_col2:
+        st.selectbox("End Time", ["16:00", "17:00", "18:00", "19:00"], index=2)
     
     if st.button("GET FORECAST"):
-        with st.spinner("Analyzing Potomac conditions (this may take 20s)..."):
+        with st.spinner("Fetching your Skipper's Briefing..."):
             try:
-                payload = {"contents": [{"parts": [{"text": f"Sailing weather brief for Potomac (DCA) on {sel_date}. Wind mph, Gusts, Temp, Flow cfs, Tides. Bold headings. Skipper Rec for Flying Scott vs Cruiser."}]}]}
-                # Increased timeout to 30 seconds
+                payload = {"contents": [{"parts": [{"text": "Provide a sailing weather brief for Potomac River (DCA) for today. Wind mph/dir, Gusts, Temp, Flow cfs, and Tides. Include a Skipper Recommendation for a Flying Scott vs a Cruiser."}]}]}
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                if 'candidates' in data:
-                    st.session_state.weather_data = data['candidates']['content']['parts']['text']
-                    st.session_state.page = 'dashboard'
-                    st.rerun()
-                else:
-                    st.error("AI Busy. Please wait 10 seconds and click 'Get Forecast' again.")
-            except requests.exceptions.Timeout:
-                st.error("The connection timed out. The Potomac is a busy place! Please try again.")
+                # --- THE EXACT EXTRACTION (Based on your debug image) ---
+                # data -> candidates (list) -> -> content (dict) -> parts (list) -> -> text (str)
+                briefing_text = data['candidates']['content']['parts']['text']
+                
+                st.session_state.weather_data = briefing_text
+                st.session_state.page = 'dashboard'
+                st.rerun()
             except Exception as e:
-                st.error(f"Error: {e}")
+                st.error("The Potomac is choppy! Refresh and try once more.")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
+    st.markdown("### 📡 Skipper's Briefing")
     st.markdown(st.session_state.weather_data)
     if st.button("START OVER"):
         st.session_state.page = 'home'
