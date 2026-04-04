@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (THE BACKDOOR URL) ---
+# --- 1. API SETUP (THE STABLE PRODUCTION PATH) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Using the specific 'flash-latest' string which is the 2026 'Universal' key
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={API_KEY}"
+# Using the v1 stable endpoint with the explicit models/ prefix
+API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -65,6 +65,7 @@ elif st.session_state.page == 'input':
     if st.button("GET FORECAST"):
         with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
+                # We simplified the payload to the absolute bare minimum to avoid errors
                 payload = {
                     "contents": [{"parts": [{"text": (
                         f"Provide a sailing weather brief for Potomac River (DCA) on {sel_date}. "
@@ -75,19 +76,17 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload, timeout=15)
                 data = response.json()
                 
-                # --- ROBUST UNPACKING ---
-                if 'candidates' in data:
-                    # We check if 'content' exists to avoid the index error
-                    content = data['candidates'].get('content', {})
-                    parts = content.get('parts', [])
-                    if parts:
-                        st.session_state.weather_data = parts.get('text', 'No briefing generated.')
+                # --- ROBUST UNPACKING FOR V1 ---
+                if 'candidates' in data and len(data['candidates']) > 0:
+                    candidate = data['candidates']
+                    if 'content' in candidate and 'parts' in candidate['content']:
+                        st.session_state.weather_data = candidate['content']['parts']['text']
                         st.session_state.page = 'dashboard'
                         st.rerun()
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error("Connection successful, but response structure was unexpected.")
+                    st.error("Connection successful, but no data returned. Try once more!")
             except Exception as e:
                 st.error(f"Processing Error: {e}")
 
