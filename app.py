@@ -4,16 +4,11 @@ import requests
 
 # --- 1. API SETUP ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Using the 2026 Stable Production Endpoint
+# 2026 Stable Production Endpoint
 API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
-st.markdown("""
-    <style>
-    .main { background-color: #f0f2f6; }
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #004466; color: white; }
-    </style>
-    """, unsafe_allow_html=True)
+st.markdown("<style>.stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #004466; color: white; }</style>", unsafe_allow_html=True)
 
 # --- 3. INITIALIZE STATE ---
 if 'page' not in st.session_state: st.session_state.page = 'home'
@@ -36,9 +31,9 @@ if st.session_state.page == 'home':
 elif st.session_state.page == 'gate':
     st.title(f"Logistics: {st.session_state.boat}")
     st.info("Check official SCOW sources before proceeding.")
-    c1 = st.checkbox("Review [Maintenance Notes](https://scow.org/page-1863774)")
-    c2 = st.checkbox("Confirm [Reservation Slot](https://scow.org/page-1863774)")
-    c3 = st.checkbox("Review [Weather/Nav links](https://scow.org)")
+    c1 = st.checkbox("Review Maintenance Notes")
+    c2 = st.checkbox("Confirm Reservation Slot")
+    c3 = st.checkbox("Review Weather/Nav links")
     if st.button("PROCEED TO FLOAT PLAN"):
         if c1 and c2 and c3:
             st.session_state.page = 'input'
@@ -67,19 +62,17 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                # --- THE "STABILITY" EXTRACTION ---
-                # This works even if Google adds more lists or layers
+                # --- ROBUST 2026 EXTRACTION ---
+                # This safely navigates the nested lists we saw in your debug images
                 if 'candidates' in data:
-                    candidate = data['candidates']
-                    content = candidate.get('content', candidate) # Fallback for different API versions
-                    parts = content.get('parts', [content])
-                    st.session_state.weather_data = parts.get('text', "Error: Text not found in response.")
+                    text = data['candidates']['content']['parts']['text']
+                    st.session_state.weather_data = text
                     st.session_state.page = 'dashboard'
                     st.rerun()
                 else:
-                    st.error(f"API Error: {data.get('error', {}).get('message', 'Unknown Error')}")
+                    st.error(f"API Error: {data.get('error', {}).get('message', 'Unexpected response')}")
             except Exception as e:
-                st.error(f"Connection Error: {e}")
+                st.error(f"System Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
