@@ -25,7 +25,7 @@ if st.session_state.page == 'home':
         st.rerun()
     st.button("CRUISER - ANNAPOLIS (BETA)", disabled=True)
 
-# --- SCREEN 2: LOGISTICS (Links Restored) ---
+# --- SCREEN 2: LOGISTICS ---
 elif st.session_state.page == 'gate':
     st.title(f"Logistics: {st.session_state.boat}")
     st.info("Check official SCOW sources before proceeding.")
@@ -49,7 +49,7 @@ elif st.session_state.page == 'input':
     with col2: end_t = st.selectbox("End Time", ["16:00", "17:00", "18:00", "19:00"], index=2)
     
     if st.button("GET FORECAST"):
-        with st.spinner("Analyzing Potomac..."):
+        with st.spinner("Analyzing..."):
             try:
                 prompt = (f"Provide a sailing weather brief for Potomac (DCA) for {sel_date} "
                           f"between {start_t} and {end_t}. Include Wind, Gusts, Temp, "
@@ -60,18 +60,20 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                # --- THE UNIVERSAL KEY EXTRACTION ---
-                # We use .get() and list checks to prevent "indices must be integers" errors
-                if 'candidates' in data and len(data['candidates']) > 0:
-                    cand = data['candidates']
-                    # This path handles almost any way Google formats the response
+                # --- THE FINAL ARMOR ---
+                # Check if 'candidates' exists and is a list
+                candidates = data.get('candidates', [])
+                if isinstance(candidates, list) and len(candidates) > 0:
+                    cand = candidates
+                    # Navigate the inner structure safely
                     content = cand.get('content', {})
                     parts = content.get('parts', [])
-                    if parts:
+                    if isinstance(parts, list) and len(parts) > 0:
                         st.session_state.weather_data = parts.get('text', "No text found.")
                         st.session_state.page = 'dashboard'
                         st.rerun()
-                st.error("API returned an unexpected structure. Try once more.")
+                
+                st.error("Structure Error. Please try again.")
             except Exception as e:
                 st.error(f"System Error: {e}")
 
