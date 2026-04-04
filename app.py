@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (THE 2026 STABLE PATH) ---
+# --- 1. API SETUP (THE SATURDAY EMERGENCY LANE) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Using the 2.0 Flash model which is the GA standard for v1 in 2026
-API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={API_KEY}"
+# We are moving to v1beta + gemini-1.5-flash which has higher 'Free' priority today
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -86,7 +86,7 @@ elif st.session_state.page == 'input':
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error("Connection successful, but the AI is playing coy. Try again!")
+                    st.error("No data returned. The API might be congested. Try once more!")
                     
             except Exception as e:
                 st.error(f"Connection Failed: {e}")
