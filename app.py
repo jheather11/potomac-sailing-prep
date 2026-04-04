@@ -4,7 +4,6 @@ import requests
 
 # --- 1. API SETUP ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# 2026 Stable Production Endpoint
 API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
@@ -18,7 +17,6 @@ if 'weather_data' not in st.session_state: st.session_state.weather_data = ""
 # --- SCREEN 1: HOME ---
 if st.session_state.page == 'home':
     st.title("⛵ Potomac Sail Prep (DCA)")
-    st.subheader("Select Your Craft")
     if st.button("FLYING SCOTT - POTOMAC"):
         st.session_state.boat, st.session_state.page = "Flying Scott", 'gate'
         st.rerun()
@@ -27,13 +25,13 @@ if st.session_state.page == 'home':
         st.rerun()
     st.button("CRUISER - ANNAPOLIS (BETA)", disabled=True)
 
-# --- SCREEN 2: LOGISTICS ---
+# --- SCREEN 2: LOGISTICS (Links Restored) ---
 elif st.session_state.page == 'gate':
     st.title(f"Logistics: {st.session_state.boat}")
     st.info("Check official SCOW sources before proceeding.")
-    c1 = st.checkbox("Review Maintenance Notes")
-    c2 = st.checkbox("Confirm Reservation Slot")
-    c3 = st.checkbox("Review Weather/Nav links")
+    c1 = st.checkbox("Review [Maintenance Notes](https://scow.org/page-1863774)")
+    c2 = st.checkbox("Confirm [Reservation Slot](https://scow.org/page-1863774)")
+    c3 = st.checkbox("Review [Weather/Nav links](https://scow.org)")
     if st.button("PROCEED TO FLOAT PLAN"):
         if c1 and c2 and c3:
             st.session_state.page = 'input'
@@ -51,35 +49,36 @@ elif st.session_state.page == 'input':
     with col2: end_t = st.selectbox("End Time", ["16:00", "17:00", "18:00", "19:00"], index=2)
     
     if st.button("GET FORECAST"):
-        with st.spinner("Analyzing Potomac conditions..."):
+        with st.spinner("Analyzing Potomac..."):
             try:
-                prompt = (f"Provide a sailing weather brief for Potomac River (DCA) for {sel_date} "
-                          f"between {start_t} and {end_t}. Include Wind mph/dir, Gusts, Temp, "
-                          "Flow cfs, and Tides. Format with bold headings. "
+                prompt = (f"Provide a sailing weather brief for Potomac (DCA) for {sel_date} "
+                          f"between {start_t} and {end_t}. Include Wind, Gusts, Temp, "
+                          "Flow cfs, and Tides. Bold headings. "
                           "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")
                 
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                # --- ROBUST 2026 EXTRACTION ---
-                # This safely navigates the nested lists we saw in your debug images
-                if 'candidates' in data:
-                    text = data['candidates']['content']['parts']['text']
-                    st.session_state.weather_data = text
-                    st.session_state.page = 'dashboard'
-                    st.rerun()
-                else:
-                    st.error(f"API Error: {data.get('error', {}).get('message', 'Unexpected response')}")
+                # --- THE UNIVERSAL KEY EXTRACTION ---
+                # We use .get() and list checks to prevent "indices must be integers" errors
+                if 'candidates' in data and len(data['candidates']) > 0:
+                    cand = data['candidates']
+                    # This path handles almost any way Google formats the response
+                    content = cand.get('content', {})
+                    parts = content.get('parts', [])
+                    if parts:
+                        st.session_state.weather_data = parts.get('text', "No text found.")
+                        st.session_state.page = 'dashboard'
+                        st.rerun()
+                st.error("API returned an unexpected structure. Try once more.")
             except Exception as e:
                 st.error(f"System Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
-    st.markdown("### 📡 Skipper's Briefing")
     st.markdown(st.session_state.weather_data)
-    st.divider()
     if st.button("START OVER"):
         st.session_state.page = 'home'
         st.rerun()
