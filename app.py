@@ -42,6 +42,7 @@ elif st.session_state.page == 'input':
     st.title("Float Plan")
     sel_date = st.date_input("Select Date", datetime.now())
     
+    # Times in a stable layout
     t_col1, t_col2 = st.columns(2)
     with t_col1:
         start_t = st.selectbox("Start Time", ["12:00", "13:00", "14:00", "15:00"], index=1)
@@ -49,7 +50,7 @@ elif st.session_state.page == 'input':
         end_t = st.selectbox("End Time", ["16:00", "17:00", "18:00", "19:00"], index=2)
     
     if st.button("GET FORECAST"):
-        with st.spinner("Analyzing..."):
+        with st.spinner("Analyzing Potomac..."):
             try:
                 prompt = (f"Provide a sailing weather brief for Potomac River (DCA) for {sel_date} "
                           f"between {start_t} and {end_t}. Include Wind mph/dir, Gusts, Temp, "
@@ -60,26 +61,24 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                # --- FLEXIBLE EXTRACTION ---
-                # We try the standard path first, then a backup path
-                try:
-                    res = data['candidates']['content']['parts']['text']
-                except:
-                    # Backup path for different API versions
-                    res = data['candidates']['parts']['text']
+                # --- THE "FINGERPRINT" EXTRACTION ---
+                # We target the exact structure shown in your debug image
+                raw_text = data['candidates']['content']['parts']['text']
                 
-                st.session_state.weather_data = res
+                st.session_state.weather_data = raw_text
                 st.session_state.page = 'dashboard'
                 st.rerun()
             except Exception as e:
-                # If it fails, show the REAL error so we can stop guessing
-                st.error(f"Logic Error: {e}")
-                st.write("Full API Response:", data)
+                # If it fails, we show a clean message and the data for one last look
+                st.error("Structure Mismatch. Check the 'Raw Response' below.")
+                st.json(data)
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
+    st.markdown("### 📡 Skipper's Briefing")
     st.markdown(st.session_state.weather_data)
+    st.divider()
     if st.button("START OVER"):
         st.session_state.page = 'home'
         st.rerun()
