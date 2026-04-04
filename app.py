@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (THE PRODUCTION-TIER SYNTAX) ---
+# --- 1. API SETUP ---
+# Ensure your Streamlit Secret 'GEMINI_API_KEY' has NO SPACES around the name or equals sign
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Note the addition of 'models/' before the model name - this is the fix for the 404
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={API_KEY}"
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -56,27 +56,26 @@ elif st.session_state.page == 'gate':
 elif st.session_state.page == 'input':
     st.title("Float Plan")
     sel_date = st.date_input("Select Date", datetime.now())
-    st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
-    st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
+    # Side-by-side time inputs for a cleaner look
+    col1, col2 = st.columns(2)
+    with col1:
+        st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
+    with col2:
+        st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
     
     if st.button("GET FORECAST"):
         with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
                 payload = {
-                    "contents": [{
-                        "parts": [{
-                            "text": (f"Provide a sailing weather brief for Potomac River (DCA) on {sel_date}. "
-                                     "Include: Wind mph/direction, Gusts, Temp, Precip %, Thunder risk, "
-                                     "River Flow cfs, and next two Tides. Format with bold headings. "
-                                     "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")
-                        }]
-                    }]
+                    "contents": [{"parts": [{"text": (
+                        f"Provide a sailing weather brief for Potomac River (DCA) on {sel_date}. "
+                        "Include: Wind mph/direction, Gusts, Temp, Precip %, Thunder risk, "
+                        "River Flow cfs, and next two Tides. Format with bold headings. "
+                        "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")}]}]
                 }
-                
                 response = requests.post(API_URL, json=payload)
                 data = response.json()
                 
-                # --- UNPACKING ---
                 if 'candidates' in data and len(data['candidates']) > 0:
                     st.session_state.weather_data = data['candidates']['content']['parts']['text']
                     st.session_state.page = 'dashboard'
@@ -84,8 +83,7 @@ elif st.session_state.page == 'input':
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error("No data returned. Try 'GET FORECAST' one more time.")
-                    
+                    st.error("Connection successful, but no data returned. Check Secret formatting.")
             except Exception as e:
                 st.error(f"Connection Failed: {e}")
 
