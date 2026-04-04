@@ -4,25 +4,36 @@ import requests
 
 # --- 1. API SETUP ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Using the v1 endpoint with the stable 1.5-flash model
+# Using the v1 stable endpoint
 API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
-st.markdown("<style>.stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #004466; color: white; }</style>", unsafe_allow_html=True)
+st.markdown("""
+    <style>
+    .main { background-color: #f0f2f6; }
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #004466; color: white; }
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- 3. INITIALIZE STATE ---
-if 'page' not in st.session_state: st.session_state.page = 'home'
-if 'boat' not in st.session_state: st.session_state.boat = None
-if 'weather_data' not in st.session_state: st.session_state.weather_data = ""
+if 'page' not in st.session_state:
+    st.session_state.page = 'home'
+if 'boat' not in st.session_state:
+    st.session_state.boat = None
+if 'weather_data' not in st.session_state:
+    st.session_state.weather_data = ""
 
 # --- SCREEN 1: HOME ---
 if st.session_state.page == 'home':
     st.title("⛵ Potomac Sail Prep (DCA)")
+    st.subheader("Select Your Craft")
     if st.button("FLYING SCOTT - POTOMAC"):
-        st.session_state.boat, st.session_state.page = "Flying Scott", 'gate'
+        st.session_state.boat = "Flying Scott"
+        st.session_state.page = 'gate'
         st.rerun()
     if st.button("CRUISER - POTOMAC"):
-        st.session_state.boat, st.session_state.page = "Cruiser", 'gate'
+        st.session_state.boat = "Cruiser"
+        st.session_state.page = 'gate'
         st.rerun()
     st.button("CRUISER - ANNAPOLIS (BETA)", disabled=True)
 
@@ -46,36 +57,47 @@ elif st.session_state.page == 'input':
     st.title("Float Plan")
     sel_date = st.date_input("Select Date", datetime.now())
     col1, col2 = st.columns(2)
-    with col1: st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
-    with col2: st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
+    with col1:
+        st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
+    with col2:
+        st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
     
     if st.button("GET FORECAST"):
-        with st.spinner("Fetching Potomac Briefing..."):
+        with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
-                payload = {"contents": [{"parts": [{"text": f"Sailing weather brief for Potomac (DCA) on {sel_date}. Wind, Gusts, Temp, Precip, Flow cfs, Tides. Bold headings. Skipper Recommendation for Flying Scott vs Cruiser."}]}]}
+                payload = {
+                    "contents": [{"parts": [{"text": (
+                        f"Provide a sailing weather brief for Potomac River (DCA) on {sel_date}. "
+                        "Include: Wind mph/direction, Gusts, Temp, Precip %, Thunder risk, "
+                        "River Flow cfs, and next two Tides. Format with bold headings. "
+                        "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")}]}]
+                }
                 response = requests.post(API_URL, json=payload, timeout=15)
-                res_data = response.json()
+                data = response.json()
                 
-                # --- THE NUCLEAR EXTRACTION (No more index errors) ---
-                try:
-                    # We drill down specifically through the list structure
-                    candidates_list = res_data.get('candidates', [])
-                    first_candidate = candidates_list
-                    content_dict = first_candidate.get('content', {})
-                    parts_list = content_dict.get('parts', [])
-                    st.session_state.weather_data = parts_list.get('text', "Data error.")
-                    st.session_state.page = 'dashboard'
-                    st.rerun()
-                except (KeyError, IndexError, TypeError):
-                    st.error(f"API Structure Mismatch. Raw Response: {res_data}")
+                # --- THE HARD-CODED EXTRACTION (No .get() on lists) ---
+                # We skip the 'get' and go straight to the index
+                candidates = data['candidates'] # This is a list
+                first_cand = candidates      # This is a dictionary
+                content = first_cand['content'] # This is a dictionary
+                parts = content['parts']        # This is a list
+                text_result = parts['text']  # This is the string we want
+                
+                st.session_state.weather_data = text_result
+                st.session_state.page = 'dashboard'
+                st.rerun()
+                
             except Exception as e:
-                st.error(f"Connection Error: {e}")
+                # This will show us the raw data if it fails, so we can fix it instantly
+                st.error(f"Extraction Error: {e}")
+                st.write("Raw Debug Data:", data)
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
     st.markdown("### 📡 Skipper's Briefing")
     st.markdown(st.session_state.weather_data)
+    st.divider()
     if st.button("START OVER"):
         st.session_state.page = 'home'
         st.rerun()
