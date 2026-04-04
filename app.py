@@ -74,29 +74,31 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload, timeout=15)
                 data = response.json()
                 
-                # --- THE ANCHOR LOGIC ---
+                # --- THE HARD-CODED EXTRACTION ---
                 if 'candidates' in data:
-                    # Capture the text
-                    briefing = data['candidates']['content']['parts']['text']
-                    # Lock it into Session State so it survives the rerun
-                    st.session_state.weather_data = briefing
+                    # We manually index the list to avoid the "str" error
+                    candidates_list = data['candidates']
+                    first_candidate = candidates_list
+                    content_dict = first_candidate['content']
+                    parts_list = content_dict['parts']
+                    text_output = parts_list['text']
+                    
+                    st.session_state.weather_data = text_output
                     st.session_state.page = 'dashboard'
-                    # Explicitly tell Streamlit to refresh now that we have the data
                     st.rerun()
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
+                else:
+                    st.error("Connection successful, but response structure was unexpected.")
             except Exception as e:
-                st.error(f"Connection Error: {e}")
+                st.error(f"Display Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
     st.markdown("### 📡 Skipper's Briefing")
-    # Only display if we have data anchored in the session
     if st.session_state.weather_data:
         st.markdown(st.session_state.weather_data)
-    else:
-        st.warning("Briefing data lost. Please try again.")
     st.divider()
     if st.button("START OVER"):
         st.session_state.page = 'home'
