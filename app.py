@@ -17,14 +17,12 @@ if 'weather_data' not in st.session_state: st.session_state.weather_data = ""
 # --- SCREEN 1: HOME ---
 if st.session_state.page == 'home':
     st.title("⛵ Potomac Sail Prep (DCA)")
-    st.subheader("Select Your Location & Craft")
     if st.button("FLYING SCOTT - POTOMAC"):
         st.session_state.boat, st.session_state.page = "Flying Scott", 'gate'
         st.rerun()
     if st.button("CRUISER - POTOMAC"):
         st.session_state.boat, st.session_state.page = "Cruiser", 'gate'
         st.rerun()
-    # Annapolis is back to being inactive and grey per your request
     st.button("CRUISER - ANNAPOLIS (BETA)", disabled=True)
 
 # --- SCREEN 2: LOGISTICS ---
@@ -51,34 +49,45 @@ elif st.session_state.page == 'input':
     with t_col2: end_t = st.selectbox("End Time", ["16:00", "17:00", "18:00", "19:00"], index=2)
     
     if st.button("GET FORECAST"):
-        with st.spinner("Generating Dashboard..."):
+        with st.spinner("Analyzing..."):
             try:
-                # Force the AI to output a clean Table for the metrics
                 prompt = (f"Provide a sailing weather brief for Potomac (DCA) on {sel_date} "
                           f"between {start_t} and {end_t}. \n\n"
-                          "REQUIRED FORMAT:\n"
-                          "1. A Markdown table with columns: Metric | Value | Notes. "
-                          "Include rows for Wind, Gusts, Temp, Flow (cfs), and Tides.\n"
-                          "2. A 'Skipper Recommendation' section for a Flying Scott vs a Cruiser.")
+                          "1. Create a Markdown table with columns: Metric | Value | Notes. "
+                          "Include Wind, Gusts, Temp, Flow cfs, and Tides. \n"
+                          "2. Add a 'Skipper Recommendation' section for a Flying Scott vs a Cruiser.")
                 
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                # Robust extraction for the Paid Tier
-                briefing = data['candidates']['content']['parts']['text']
-                st.session_state.weather_data = briefing
-                st.session_state.page = 'dashboard'
-                st.rerun()
+                # --- THE SEARCH & RESCUE EXTRACTOR ---
+                def find_text(obj):
+                    if isinstance(obj, dict):
+                        for k, v in obj.items():
+                            if k == 'text': return v
+                            res = find_text(v)
+                            if res: return res
+                    elif isinstance(obj, list):
+                        for item in obj:
+                            res = find_text(item)
+                            if res: return res
+                    return None
+
+                result = find_text(data)
+                if result:
+                    st.session_state.weather_data = result
+                    st.session_state.page = 'dashboard'
+                    st.rerun()
+                else:
+                    st.error("No briefing data found in the response.")
             except Exception as e:
-                st.error(f"System Error: {e}")
+                st.error(f"Logic Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
-    st.markdown("### 📡 Weather Briefing")
     st.markdown(st.session_state.weather_data)
-    st.divider()
     if st.button("START OVER"):
         st.session_state.page = 'home'
         st.rerun()
