@@ -2,9 +2,8 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (2026 STABLE PRODUCTION PATH) ---
+# --- 1. API SETUP ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Updated to Gemini 2.5 Flash - the production standard for April 2026
 API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
@@ -63,7 +62,7 @@ elif st.session_state.page == 'input':
         st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
     
     if st.button("GET FORECAST"):
-        with st.spinner("Gemini 2.5 is analyzing Potomac conditions..."):
+        with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
                 payload = {
                     "contents": [{"parts": [{"text": (
@@ -75,17 +74,21 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload)
                 data = response.json()
                 
-                # Robust unpacking for v1 responses
+                # --- NEW ROBUST UNPACKING FOR 2.5 RESPONSE ---
                 if 'candidates' in data and len(data['candidates']) > 0:
-                    st.session_state.weather_data = data['candidates']['content']['parts']['text']
-                    st.session_state.page = 'dashboard'
-                    st.rerun()
+                    # We check for 'content' then 'parts' to avoid the index error
+                    content = data['candidates'].get('content', {})
+                    parts = content.get('parts', [])
+                    if parts:
+                        st.session_state.weather_data = parts.get('text', 'No briefing generated.')
+                        st.session_state.page = 'dashboard'
+                        st.rerun()
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error("No data returned. Check Secret formatting for extra spaces.")
+                    st.error("Connection successful, but the AI response was empty. Try again!")
             except Exception as e:
-                st.error(f"Connection Failed: {e}")
+                st.error(f"Processing Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
