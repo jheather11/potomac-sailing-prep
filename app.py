@@ -1,6 +1,7 @@
 import streamlit as st
 from datetime import datetime
 import requests
+import json
 
 # --- 1. API SETUP ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
@@ -23,9 +24,8 @@ if st.session_state.page == 'home':
     if st.button("CRUISER - POTOMAC"):
         st.session_state.boat, st.session_state.page = "Cruiser", 'gate'
         st.rerun()
-    st.button("CRUISER - ANNAPOLIS (BETA)", disabled=True)
 
-# --- SCREEN 2: LOGISTICS ---
+# --- SCREEN 2: LOGISTICS (Links Restored) ---
 elif st.session_state.page == 'gate':
     st.title(f"Logistics: {st.session_state.boat}")
     st.info("Check official SCOW sources before proceeding.")
@@ -44,12 +44,12 @@ elif st.session_state.page == 'gate':
 elif st.session_state.page == 'input':
     st.title("Float Plan")
     sel_date = st.date_input("Select Date", datetime.now())
-    col1, col2 = st.columns(2)
-    with col1: start_t = st.selectbox("Start Time", ["12:00", "13:00", "14:00", "15:00"], index=1)
-    with col2: end_t = st.selectbox("End Time", ["16:00", "17:00", "18:00", "19:00"], index=2)
+    t_col1, t_col2 = st.columns(2)
+    with t_col1: start_t = st.selectbox("Start Time", ["12:00", "13:00", "14:00", "15:00"], index=1)
+    with t_col2: end_t = st.selectbox("End Time", ["16:00", "17:00", "18:00", "19:00"], index=2)
     
     if st.button("GET FORECAST"):
-        with st.spinner("Analyzing..."):
+        with st.spinner("Analyzing Potomac..."):
             try:
                 prompt = (f"Provide a sailing weather brief for Potomac (DCA) for {sel_date} "
                           f"between {start_t} and {end_t}. Include Wind, Gusts, Temp, "
@@ -60,20 +60,21 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                # --- THE FINAL ARMOR ---
-                # Check if 'candidates' exists and is a list
-                candidates = data.get('candidates', [])
-                if isinstance(candidates, list) and len(candidates) > 0:
-                    cand = candidates
-                    # Navigate the inner structure safely
-                    content = cand.get('content', {})
-                    parts = content.get('parts', [])
-                    if isinstance(parts, list) and len(parts) > 0:
-                        st.session_state.weather_data = parts.get('text', "No text found.")
-                        st.session_state.page = 'dashboard'
-                        st.rerun()
-                
-                st.error("Structure Error. Please try again.")
+                # --- ATTEMPT 1: THE SLEDGEHAMMER ---
+                # We convert the whole response to a string and grab the 'text' field contents
+                # This bypasses the list/dict structure entirely
+                raw_str = json.dumps(data)
+                if '"text":' in raw_str:
+                    # Find where the text starts and ends
+                    start_idx = raw_str.find('"text": "') + 9
+                    end_idx = raw_str.find('"', start_idx)
+                    # Get the content and fix the escaped newlines (\n)
+                    clean_text = raw_str[start_idx:end_idx].replace("\\n", "\n")
+                    st.session_state.weather_data = clean_text
+                    st.session_state.page = 'dashboard'
+                    st.rerun()
+                else:
+                    st.error("Text not found in the AI response.")
             except Exception as e:
                 st.error(f"System Error: {e}")
 
