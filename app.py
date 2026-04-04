@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (CORRECTED PRODUCTION PATH) ---
+# --- 1. API SETUP (UPDATED TO STABLE 2.5 MODEL) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Note: Added 'models/' prefix which is required for the stable v1 path
-API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key={API_KEY}"
+# Using the stable v1 path with the 2.5 Flash model for maximum reliability
+API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -43,7 +43,7 @@ elif st.session_state.page == 'gate':
     st.info("Check official SCOW sources before proceeding.")
     c1 = st.checkbox("I have reviewed [Maintenance Notes](https://scow.org/page-1863774).")
     c2 = st.checkbox("I have confirmed my [Reservation Slot](https://scow.org/page-1863774).")
-    c3 = st.checkbox("I have reviewed [Weather/Nav links](https://scow.org).")
+    c3 = st.checkbox("I have reviewed [Weather/Nav links](https://scow.org) on the SCOW homepage.")
     if st.button("PROCEED TO FLOAT PLAN"):
         if c1 and c2 and c3:
             st.session_state.page = 'input'
@@ -52,11 +52,11 @@ elif st.session_state.page == 'gate':
         st.session_state.page = 'home'
         st.rerun()
 
-# --- SCREEN 3: FLOAT PLAN INPUT (TIMES RESTORED) ---
+# --- SCREEN 3: FLOAT PLAN INPUT (RE-STABILIZED) ---
 elif st.session_state.page == 'input':
     st.title("Float Plan")
     sel_date = st.date_input("Select Date", datetime.now())
-    # Restored Time Inputs
+    # Time inputs restored
     st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
     st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
     
@@ -82,8 +82,8 @@ elif st.session_state.page == 'input':
                     st.session_state.page = 'dashboard'
                     st.rerun()
                 else:
-                    # Detailed error reporting
-                    err_msg = data.get('error', {}).get('message', 'Check API Key permissions in AI Studio.')
+                    # If error, show exactly what Google says
+                    err_msg = data.get('error', {}).get('message', 'Unknown API Error.')
                     st.error(f"API Error: {err_msg}")
                     
             except Exception as e:
