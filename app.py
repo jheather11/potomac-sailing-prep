@@ -74,30 +74,32 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload, timeout=15)
                 data = response.json()
                 
-                # --- FINAL ROBUST UNPACKING ---
-                if 'candidates' in data:
-                    # Direct access to the first part of the first candidate
-                    text_output = data['candidates']['content']['parts']['text']
-                    # FORCE SAVE TO STATE
-                    st.session_state.weather_data = text_output
-                    st.session_state.page = 'dashboard'
-                    st.rerun()
+                # --- ROBUST UNPACKING (v3.4) ---
+                # 1. Check if 'candidates' list exists
+                if 'candidates' in data and isinstance(data['candidates'], list) and len(data['candidates']) > 0:
+                    # 2. Get the first candidate dictionary
+                    first_candidate = data['candidates']
+                    # 3. Dig into content -> parts (list)
+                    content = first_candidate.get('content', {})
+                    parts = content.get('parts', [])
+                    # 4. Extract text from first part
+                    if parts and len(parts) > 0:
+                        st.session_state.weather_data = parts.get('text', 'No briefing text found.')
+                        st.session_state.page = 'dashboard'
+                        st.rerun()
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error("No data returned. Try once more.")
+                    st.error("Connection successful, but response structure was unexpected. Try again.")
             except Exception as e:
-                st.error(f"Display Error: {e}")
+                st.error(f"Processing Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
     st.markdown("### 📡 Skipper's Briefing")
-    # Display the saved data
     if st.session_state.weather_data:
         st.markdown(st.session_state.weather_data)
-    else:
-        st.warning("No data found. Please go back and try again.")
     st.divider()
     if st.button("START OVER"):
         st.session_state.page = 'home'
