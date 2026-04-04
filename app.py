@@ -1,7 +1,6 @@
 import streamlit as st
 from datetime import datetime
 import requests
-import json
 
 # --- 1. API SETUP ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
@@ -18,15 +17,15 @@ if 'weather_data' not in st.session_state: st.session_state.weather_data = ""
 # --- SCREEN 1: HOME ---
 if st.session_state.page == 'home':
     st.title("⛵ Potomac Sail Prep (DCA)")
+    st.subheader("Select Your Location & Craft")
     if st.button("FLYING SCOTT - POTOMAC"):
         st.session_state.boat, st.session_state.page = "Flying Scott", 'gate'
         st.rerun()
     if st.button("CRUISER - POTOMAC"):
         st.session_state.boat, st.session_state.page = "Cruiser", 'gate'
         st.rerun()
-    if st.button("CRUISER - ANNAPOLIS"):
-        st.session_state.boat, st.session_state.page = "Cruiser (Annapolis)", 'gate'
-        st.rerun()
+    # Annapolis is back to being inactive and grey per your request
+    st.button("CRUISER - ANNAPOLIS (BETA)", disabled=True)
 
 # --- SCREEN 2: LOGISTICS ---
 elif st.session_state.page == 'gate':
@@ -52,44 +51,32 @@ elif st.session_state.page == 'input':
     with t_col2: end_t = st.selectbox("End Time", ["16:00", "17:00", "18:00", "19:00"], index=2)
     
     if st.button("GET FORECAST"):
-        with st.spinner("Analyzing Potomac..."):
+        with st.spinner("Generating Dashboard..."):
             try:
-                # Targeted prompt for better formatting
-                prompt = (f"Provide a sailing weather brief for Potomac (DCA) for {sel_date} "
-                          f"between {start_t} and {end_t}. Include Wind, Gusts, Temp, "
-                          "Flow cfs, and Tides. Use Markdown bold headings and bullet points. "
-                          "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")
+                # Force the AI to output a clean Table for the metrics
+                prompt = (f"Provide a sailing weather brief for Potomac (DCA) on {sel_date} "
+                          f"between {start_t} and {end_t}. \n\n"
+                          "REQUIRED FORMAT:\n"
+                          "1. A Markdown table with columns: Metric | Value | Notes. "
+                          "Include rows for Wind, Gusts, Temp, Flow (cfs), and Tides.\n"
+                          "2. A 'Skipper Recommendation' section for a Flying Scott vs a Cruiser.")
                 
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                # --- ATTEMPT 2: REFINED SLEDGEHAMMER ---
-                # We extract the text but handle the double-backslashes correctly for Markdown
-                raw_str = json.dumps(data)
-                if '"text":' in raw_str:
-                    # Find the content inside the "text": "..." quotes
-                    start_marker = '"text": "'
-                    start_idx = raw_str.find(start_marker) + len(start_marker)
-                    # Find the end quote that isn't escaped
-                    end_idx = raw_str.find('"', start_idx)
-                    while raw_str[end_idx-1] == '\\':
-                        end_idx = raw_str.find('"', end_idx + 1)
-                    
-                    # Clean up the string so it renders correctly as Markdown
-                    clean_text = raw_str[start_idx:end_idx].encode().decode('unicode_escape')
-                    st.session_state.weather_data = clean_text
-                    st.session_state.page = 'dashboard'
-                    st.rerun()
-                else:
-                    st.error("AI response format changed. Check API status.")
+                # Robust extraction for the Paid Tier
+                briefing = data['candidates']['content']['parts']['text']
+                st.session_state.weather_data = briefing
+                st.session_state.page = 'dashboard'
+                st.rerun()
             except Exception as e:
                 st.error(f"System Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
-    st.divider()
+    st.markdown("### 📡 Weather Briefing")
     st.markdown(st.session_state.weather_data)
     st.divider()
     if st.button("START OVER"):
