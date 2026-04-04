@@ -78,12 +78,14 @@ elif st.session_state.page == 'input':
                 if 'candidates' in data and isinstance(data['candidates'], list) and len(data['candidates']) > 0:
                     # We grab the first candidate item from the list
                     first_candidate = data['candidates']
-                    content = first_candidate.get('content', {})
-                    parts = content.get('parts', [])
-                    if parts and len(parts) > 0:
-                        st.session_state.weather_data = parts.get('text', 'No briefing text found.')
-                        st.session_state.page = 'dashboard'
-                        st.rerun()
+                    # Check if 'content' exists as a dictionary
+                    if isinstance(first_candidate, dict):
+                        content = first_candidate.get('content', {})
+                        parts = content.get('parts', [])
+                        if parts and len(parts) > 0:
+                            st.session_state.weather_data = parts.get('text', 'No briefing text found.')
+                            st.session_state.page = 'dashboard'
+                            st.rerun()
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
