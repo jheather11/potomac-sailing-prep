@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP ---
-# Ensure your Streamlit Secret 'GEMINI_API_KEY' has NO SPACES around the name or equals sign
+# --- 1. API SETUP (STABLE PRODUCTION PATH) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+# Using the v1 stable endpoint with the required 'models/' prefix
+API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -56,7 +56,6 @@ elif st.session_state.page == 'gate':
 elif st.session_state.page == 'input':
     st.title("Float Plan")
     sel_date = st.date_input("Select Date", datetime.now())
-    # Side-by-side time inputs for a cleaner look
     col1, col2 = st.columns(2)
     with col1:
         st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
@@ -83,7 +82,7 @@ elif st.session_state.page == 'input':
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error("Connection successful, but no data returned. Check Secret formatting.")
+                    st.error("No data returned. Check Secret formatting for extra spaces.")
             except Exception as e:
                 st.error(f"Connection Failed: {e}")
 
