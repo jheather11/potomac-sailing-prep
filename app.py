@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (THE MASTER KEY) ---
+# --- 1. API SETUP (THE 2026 STABLE PATH) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Using the Stable v1 endpoint with the generic model string
-API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+# Using the 2.0 Flash model which is the GA standard for v1 in 2026
+API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -62,13 +62,12 @@ elif st.session_state.page == 'input':
     if st.button("GET FORECAST"):
         with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
-                # We add a hint to the AI to use its internal search capabilities
                 payload = {
                     "contents": [{
                         "parts": [{
                             "text": (f"Provide a sailing weather brief for Potomac River (DCA) on {sel_date}. "
                                      "Include: Wind mph/direction, Gusts, Temp, Precip %, Thunder risk, "
-                                     "River Flow cfs, and next two Tides. Format with clear headings. "
+                                     "River Flow cfs, and next two Tides. Format with bold headings. "
                                      "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")
                         }]
                     }]
@@ -85,10 +84,9 @@ elif st.session_state.page == 'input':
                         st.session_state.page = 'dashboard'
                         st.rerun()
                 elif 'error' in data:
-                    # This will tell us if it's a model error or a key error
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error("Connection successful, but no data returned. Please try again.")
+                    st.error("Connection successful, but the AI is playing coy. Try again!")
                     
             except Exception as e:
                 st.error(f"Connection Failed: {e}")
