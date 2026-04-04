@@ -28,7 +28,7 @@ if st.session_state.page == 'home':
 # --- SCREEN 2: LOGISTICS ---
 elif st.session_state.page == 'gate':
     st.title(f"Logistics: {st.session_state.boat}")
-    st.warning("IMPORTANT: Review the following SCOW safety requirements and links:")
+    st.warning("Review the following SCOW requirements before proceeding:")
     c1 = st.checkbox("Review [Maintenance Notes](https://scow.org/page-1863774)")
     c2 = st.checkbox("Confirm [Reservation Slot](https://scow.org/page-1863774)")
     c3 = st.checkbox("Review [Weather/Nav links](https://scow.org)")
@@ -43,29 +43,30 @@ elif st.session_state.page == 'gate':
 # --- SCREEN 3: FLOAT PLAN INPUT ---
 elif st.session_state.page == 'input':
     st.title("Float Plan")
-    # Date picker defaults to tomorrow, limited to a 7-day window
+    # Dynamic Date Selection
     sel_date = st.date_input("Select Date", datetime.now() + timedelta(days=1))
     t_col1, t_col2 = st.columns(2)
     with t_col1: start_t = st.selectbox("Start", ["12:00", "13:00", "14:00", "15:00"], index=1)
     with t_col2: end_t = st.selectbox("End", ["16:00", "17:00", "18:00", "19:00"], index=2)
     
-    if st.button("GET LIVE DASHBOARD"):
-        with st.spinner(f"Fetching live data for {sel_date}..."):
+    if st.button("GET LIVE BRIEFING"):
+        with st.spinner(f"Auditing Live Data for {sel_date}..."):
             try:
-                # DYNAMIC PROMPT - NO HARD-CODED DATA
-                prompt = (f"Act as a professional Potomac River Safety Officer. \n"
-                          f"Retrieve and analyze the forecast for Potomac (DCA) on {sel_date} "
-                          f"between {start_t} and {end_t}. \n\n"
-                          "REQUIRED DATA AUDIT:\n"
-                          "1. WIND: Sustained & Gusts in kts. (Status: 🔴 if Gusts > 25, 🟡 if > 18).\n"
-                          "2. TEMP: Air (Fahrenheit Range) and Water (Fahrenheit).\n"
-                          "3. FLOW: Use gauge height in FEET. Compare to April avg (Approx 4.5ft). (Status: 🔴 if > 6ft).\n"
-                          "4. TIDES: Find specific High and Low times/feet for this date. (Status: 🟡 if returning at max ebb).\n"
-                          "5. PRECIP: Rain probability and Thunder risk. (Status: 🔴 if Thunder likely).\n\n"
-                          "OUTPUT FORMAT:\n"
-                          "- Markdown Table (Metric | Value | Status (🟢/🟡/🔴))\n"
-                          "- SECTION: CONSIDERATIONS (Boat-specific risks, current, and depth concerns).\n"
-                          "- NO INTRODUCTORY TEXT.")
+                # DYNAMIC PROMPT: NO HARD-CODED DATA
+                prompt = (f"Act as a professional Potomac River weather officer. Retrieve the forecast for Potomac (DCA) "
+                          f"specifically for {sel_date} between {start_t} and {end_t}. \n\n"
+                          "PRECISION DATA AUDIT:\n"
+                          "1. WIND: Sustained (kts) + Direction (e.g. WNW) + Gusts (kts).\n"
+                          "2. TEMP: Air (F Range) and Water (F).\n"
+                          "3. FLOW: Use Gauge Height in FEET (ft). Compare to monthly average.\n"
+                          "4. TIDES: Identify the nearest High and Low tide times and feet for this date.\n"
+                          "5. PRECIP: Rain probability (%) and Thunder risk.\n\n"
+                          "DASHBOARD FORMAT:\n"
+                          "- START with a Markdown Table (Metric | Value | Status).\n"
+                          "- Use 🟢/🟡/🔴 for Status based on safety.\n"
+                          "- NO introductory text, no safety alerts, no disclaimers.\n"
+                          "- END with a 'CONSIDERATIONS' section for ebb current or wind risks.\n"
+                          "- NO OTHER TEXT.")
                 
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 response = requests.post(API_URL, json=payload, timeout=30)
@@ -84,17 +85,17 @@ elif st.session_state.page == 'input':
                             if res: return res
                     return None
 
-                result = find_text(data)
-                if result:
-                    st.session_state.weather_data = result
-                    st.session_state.page = 'dashboard'
-                    st.rerun()
+                st.session_state.weather_data = find_text(data)
+                st.session_state.snapshot_info = f"{sel_date} | {start_t} to {end_t}"
+                st.session_state.page = 'dashboard'
+                st.rerun()
             except Exception as e:
                 st.error(f"Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.header(f"Briefing: {st.session_state.boat}")
+    st.caption(f"Snapshot: {st.session_state.snapshot_info}")
     st.markdown(st.session_state.weather_data)
     if st.button("NEW PLAN"):
         st.session_state.page = 'home'
