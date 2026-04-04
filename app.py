@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (THE UNIVERSAL KEY) ---
+# --- 1. API SETUP (THE NUCLEAR OPTION) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# We use v1beta and the full 'models/' prefix to kill the 404 error
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+# We are using 'gemini-pro' because it is the most stable name across all API versions
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -63,7 +63,7 @@ elif st.session_state.page == 'input':
         st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
     
     if st.button("GET FORECAST"):
-        with st.spinner("Gemini is analyzing Potomac conditions..."):
+        with st.spinner("Gemini Pro is analyzing Potomac conditions..."):
             try:
                 payload = {
                     "contents": [{"parts": [{"text": (
@@ -75,16 +75,16 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload, timeout=15)
                 data = response.json()
                 
-                # --- THE ERROR-PROOF UNPACKING ---
+                # --- UNIVERSAL UNPACKING ---
                 if 'candidates' in data:
-                    text_result = data['candidates']['content']['parts']['text']
+                    text_result = data['candidates']['parts']['text']
                     st.session_state.weather_data = text_result
                     st.session_state.page = 'dashboard'
                     st.rerun()
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error(f"Unexpected response structure: {data}")
+                    st.error(f"Structure Mismatch: {data}")
                     
             except Exception as e:
                 st.error(f"System Error: {e}")
