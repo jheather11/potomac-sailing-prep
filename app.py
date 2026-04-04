@@ -24,8 +24,11 @@ if st.session_state.page == 'home':
     if st.button("CRUISER - POTOMAC"):
         st.session_state.boat, st.session_state.page = "Cruiser", 'gate'
         st.rerun()
+    if st.button("CRUISER - ANNAPOLIS"):
+        st.session_state.boat, st.session_state.page = "Cruiser (Annapolis)", 'gate'
+        st.rerun()
 
-# --- SCREEN 2: LOGISTICS (Links Restored) ---
+# --- SCREEN 2: LOGISTICS ---
 elif st.session_state.page == 'gate':
     st.title(f"Logistics: {st.session_state.boat}")
     st.info("Check official SCOW sources before proceeding.")
@@ -51,37 +54,44 @@ elif st.session_state.page == 'input':
     if st.button("GET FORECAST"):
         with st.spinner("Analyzing Potomac..."):
             try:
+                # Targeted prompt for better formatting
                 prompt = (f"Provide a sailing weather brief for Potomac (DCA) for {sel_date} "
                           f"between {start_t} and {end_t}. Include Wind, Gusts, Temp, "
-                          "Flow cfs, and Tides. Bold headings. "
+                          "Flow cfs, and Tides. Use Markdown bold headings and bullet points. "
                           "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")
                 
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                # --- ATTEMPT 1: THE SLEDGEHAMMER ---
-                # We convert the whole response to a string and grab the 'text' field contents
-                # This bypasses the list/dict structure entirely
+                # --- ATTEMPT 2: REFINED SLEDGEHAMMER ---
+                # We extract the text but handle the double-backslashes correctly for Markdown
                 raw_str = json.dumps(data)
                 if '"text":' in raw_str:
-                    # Find where the text starts and ends
-                    start_idx = raw_str.find('"text": "') + 9
+                    # Find the content inside the "text": "..." quotes
+                    start_marker = '"text": "'
+                    start_idx = raw_str.find(start_marker) + len(start_marker)
+                    # Find the end quote that isn't escaped
                     end_idx = raw_str.find('"', start_idx)
-                    # Get the content and fix the escaped newlines (\n)
-                    clean_text = raw_str[start_idx:end_idx].replace("\\n", "\n")
+                    while raw_str[end_idx-1] == '\\':
+                        end_idx = raw_str.find('"', end_idx + 1)
+                    
+                    # Clean up the string so it renders correctly as Markdown
+                    clean_text = raw_str[start_idx:end_idx].encode().decode('unicode_escape')
                     st.session_state.weather_data = clean_text
                     st.session_state.page = 'dashboard'
                     st.rerun()
                 else:
-                    st.error("Text not found in the AI response.")
+                    st.error("AI response format changed. Check API status.")
             except Exception as e:
                 st.error(f"System Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
+    st.divider()
     st.markdown(st.session_state.weather_data)
+    st.divider()
     if st.button("START OVER"):
         st.session_state.page = 'home'
         st.rerun()
