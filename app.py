@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (STABLE PRODUCTION PATH) ---
+# --- 1. API SETUP (2026 STABLE PRODUCTION PATH) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Using the v1 stable endpoint with the required 'models/' prefix
-API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+# Updated to Gemini 2.5 Flash - the production standard for April 2026
+API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -43,7 +43,7 @@ elif st.session_state.page == 'gate':
     st.info("Check official SCOW sources before proceeding.")
     c1 = st.checkbox("I have reviewed [Maintenance Notes](https://scow.org/page-1863774).")
     c2 = st.checkbox("I have confirmed my [Reservation Slot](https://scow.org/page-1863774).")
-    c3 = st.checkbox("I have reviewed [Weather/Nav links](https://scow.org) on the SCOW homepage.")
+    c3 = st.checkbox("I have reviewed [Weather/Nav links](https://scow.org).")
     if st.button("PROCEED TO FLOAT PLAN"):
         if c1 and c2 and c3:
             st.session_state.page = 'input'
@@ -63,7 +63,7 @@ elif st.session_state.page == 'input':
         st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
     
     if st.button("GET FORECAST"):
-        with st.spinner("Gemini is analyzing Potomac conditions..."):
+        with st.spinner("Gemini 2.5 is analyzing Potomac conditions..."):
             try:
                 payload = {
                     "contents": [{"parts": [{"text": (
@@ -75,6 +75,7 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload)
                 data = response.json()
                 
+                # Robust unpacking for v1 responses
                 if 'candidates' in data and len(data['candidates']) > 0:
                     st.session_state.weather_data = data['candidates']['content']['parts']['text']
                     st.session_state.page = 'dashboard'
