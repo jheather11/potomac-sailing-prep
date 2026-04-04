@@ -74,21 +74,22 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload)
                 data = response.json()
                 
-                # --- NEW ROBUST UNPACKING FOR 2.5 RESPONSE ---
-                if 'candidates' in data and len(data['candidates']) > 0:
-                    # We check for 'content' then 'parts' to avoid the index error
-                    content = data['candidates'].get('content', {})
+                # --- CORRECTED ROBUST UNPACKING ---
+                if 'candidates' in data and isinstance(data['candidates'], list) and len(data['candidates']) > 0:
+                    # We grab the first candidate item from the list
+                    first_candidate = data['candidates']
+                    content = first_candidate.get('content', {})
                     parts = content.get('parts', [])
-                    if parts:
-                        st.session_state.weather_data = parts.get('text', 'No briefing generated.')
+                    if parts and len(parts) > 0:
+                        st.session_state.weather_data = parts.get('text', 'No briefing text found.')
                         st.session_state.page = 'dashboard'
                         st.rerun()
                 elif 'error' in data:
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error("Connection successful, but the AI response was empty. Try again!")
+                    st.error("No valid weather data returned. Please try again.")
             except Exception as e:
-                st.error(f"Processing Error: {e}")
+                st.error(f"Display Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
