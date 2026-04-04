@@ -29,38 +29,40 @@ if st.session_state.page == 'home':
 elif st.session_state.page == 'gate':
     st.title(f"Logistics: {st.session_state.boat}")
     st.info("Check official SCOW sources before proceeding.")
-    c1 = st.checkbox("I have reviewed Maintenance Notes.")
-    c2 = st.checkbox("I have confirmed my Reservation Slot.")
-    c3 = st.checkbox("I have reviewed Weather/Nav links.")
+    c1 = st.checkbox("Review Maintenance Notes")
+    c2 = st.checkbox("Confirm Reservation Slot")
+    c3 = st.checkbox("Review Weather/Nav links")
     if st.button("PROCEED TO FLOAT PLAN"):
         if c1 and c2 and c3:
             st.session_state.page = 'input'
             st.rerun()
-    if st.button("BACK"):
-        st.session_state.page = 'home'
-        st.rerun()
 
 # --- SCREEN 3: FLOAT PLAN INPUT ---
 elif st.session_state.page == 'input':
     st.title("Float Plan")
     sel_date = st.date_input("Select Date", datetime.now())
+    col1, col2 = st.columns(2)
+    with col1: st.time_input("Start Time", datetime.strptime("13:00", "%H:%M"))
+    with col2: st.time_input("End Time", datetime.strptime("18:00", "%H:%M"))
+    
     if st.button("GET FORECAST"):
-        with st.spinner("Analyzing conditions..."):
+        with st.spinner("Analyzing Potomac conditions (this may take 20s)..."):
             try:
-                payload = {"contents": [{"parts": [{"text": f"Sailing weather brief for Potomac (DCA) on {sel_date}. Wind, Gusts, Temp, Flow cfs, Tides. Bold headings. Skipper Rec for Flying Scott vs Cruiser."}]}]}
-                response = requests.post(API_URL, json=payload, timeout=15)
+                payload = {"contents": [{"parts": [{"text": f"Sailing weather brief for Potomac (DCA) on {sel_date}. Wind mph, Gusts, Temp, Flow cfs, Tides. Bold headings. Skipper Rec for Flying Scott vs Cruiser."}]}]}
+                # Increased timeout to 30 seconds
+                response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                # --- THE BULLETPROOF EXTRACTION ---
-                # This path is the exact structure for the 2026 Gemini 2.5 API
-                text_blob = data['candidates']['content']['parts']['text']
-                
-                st.session_state.weather_data = text_blob
-                st.session_state.page = 'dashboard'
-                st.rerun()
+                if 'candidates' in data:
+                    st.session_state.weather_data = data['candidates']['content']['parts']['text']
+                    st.session_state.page = 'dashboard'
+                    st.rerun()
+                else:
+                    st.error("AI Busy. Please wait 10 seconds and click 'Get Forecast' again.")
+            except requests.exceptions.Timeout:
+                st.error("The connection timed out. The Potomac is a busy place! Please try again.")
             except Exception as e:
-                st.error(f"Final Debug - Raw Data structure was unexpected. Error: {e}")
-                st.write(data) # This will show us the 'map' if it fails
+                st.error(f"Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
