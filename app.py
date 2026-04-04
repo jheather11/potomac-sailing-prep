@@ -42,7 +42,6 @@ elif st.session_state.page == 'input':
     st.title("Float Plan")
     sel_date = st.date_input("Select Date", datetime.now())
     
-    # Times restored in a simple, stable layout
     t_col1, t_col2 = st.columns(2)
     with t_col1:
         start_t = st.selectbox("Start Time", ["12:00", "13:00", "14:00", "15:00"], index=1)
@@ -50,31 +49,36 @@ elif st.session_state.page == 'input':
         end_t = st.selectbox("End Time", ["16:00", "17:00", "18:00", "19:00"], index=2)
     
     if st.button("GET FORECAST"):
-        with st.spinner("Fetching Skipper's Briefing..."):
+        with st.spinner("Analyzing..."):
             try:
                 prompt = (f"Provide a sailing weather brief for Potomac River (DCA) for {sel_date} "
                           f"between {start_t} and {end_t}. Include Wind mph/dir, Gusts, Temp, "
-                          "Flow cfs, and Tides. Format with bold headings. "
+                          "Flow cfs, and Tides. Bold headings. "
                           "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")
                 
                 payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                # --- THE TESTED EXTRACTION ---
-                # Based on the successful map seen in your last debug
-                briefing_text = data['candidates']['content']['parts']['text']
+                # --- FLEXIBLE EXTRACTION ---
+                # We try the standard path first, then a backup path
+                try:
+                    res = data['candidates']['content']['parts']['text']
+                except:
+                    # Backup path for different API versions
+                    res = data['candidates']['parts']['text']
                 
-                st.session_state.weather_data = briefing_text
+                st.session_state.weather_data = res
                 st.session_state.page = 'dashboard'
                 st.rerun()
-            except Exception:
-                st.error("The Potomac is choppy! Click 'Get Forecast' once more.")
+            except Exception as e:
+                # If it fails, show the REAL error so we can stop guessing
+                st.error(f"Logic Error: {e}")
+                st.write("Full API Response:", data)
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
-    st.markdown("### 📡 Skipper's Briefing")
     st.markdown(st.session_state.weather_data)
     if st.button("START OVER"):
         st.session_state.page = 'home'
