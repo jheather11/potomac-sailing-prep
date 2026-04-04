@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP ---
+# --- 1. API SETUP (THE UNIVERSAL KEY) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Using the v1 stable endpoint
-API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+# We use v1beta and the full 'models/' prefix to kill the 404 error
+API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -75,22 +75,19 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload, timeout=15)
                 data = response.json()
                 
-                # --- THE HARD-CODED EXTRACTION (No .get() on lists) ---
-                # We skip the 'get' and go straight to the index
-                candidates = data['candidates'] # This is a list
-                first_cand = candidates      # This is a dictionary
-                content = first_cand['content'] # This is a dictionary
-                parts = content['parts']        # This is a list
-                text_result = parts['text']  # This is the string we want
-                
-                st.session_state.weather_data = text_result
-                st.session_state.page = 'dashboard'
-                st.rerun()
-                
+                # --- THE ERROR-PROOF UNPACKING ---
+                if 'candidates' in data:
+                    text_result = data['candidates']['content']['parts']['text']
+                    st.session_state.weather_data = text_result
+                    st.session_state.page = 'dashboard'
+                    st.rerun()
+                elif 'error' in data:
+                    st.error(f"Gemini Error: {data['error']['message']}")
+                else:
+                    st.error(f"Unexpected response structure: {data}")
+                    
             except Exception as e:
-                # This will show us the raw data if it fails, so we can fix it instantly
-                st.error(f"Extraction Error: {e}")
-                st.write("Raw Debug Data:", data)
+                st.error(f"System Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
