@@ -40,37 +40,45 @@ elif st.session_state.page == 'gate':
 # --- SCREEN 3: FLOAT PLAN INPUT ---
 elif st.session_state.page == 'input':
     st.title("Float Plan")
-    st.date_input("Select Date", datetime.now())
+    sel_date = st.date_input("Select Date", datetime.now())
     
-    # Restored and simplified time layout
     t_col1, t_col2 = st.columns(2)
     with t_col1:
-        st.selectbox("Start Time", ["12:00", "13:00", "14:00", "15:00"], index=1)
+        start_t = st.selectbox("Start Time", ["12:00", "13:00", "14:00", "15:00"], index=1)
     with t_col2:
-        st.selectbox("End Time", ["16:00", "17:00", "18:00", "19:00"], index=2)
+        end_t = st.selectbox("End Time", ["16:00", "17:00", "18:00", "19:00"], index=2)
     
     if st.button("GET FORECAST"):
         with st.spinner("Fetching your Skipper's Briefing..."):
             try:
-                payload = {"contents": [{"parts": [{"text": "Provide a sailing weather brief for Potomac River (DCA) for today. Wind mph/dir, Gusts, Temp, Flow cfs, and Tides. Include a Skipper Recommendation for a Flying Scott vs a Cruiser."}]}]}
+                # Full detailed prompt restored
+                prompt = (f"Provide a sailing weather brief for Potomac River (DCA) for {sel_date} "
+                          f"between {start_t} and {end_t}. Include Wind mph/dir, Gusts, Temp, "
+                          "Flow cfs, and Tides. Format with bold headings. "
+                          "Add a 'Skipper Recommendation' for a Flying Scott vs a Cruiser.")
+                
+                payload = {"contents": [{"parts": [{"text": prompt}]}]}
                 response = requests.post(API_URL, json=payload, timeout=30)
                 data = response.json()
                 
-                # --- THE EXACT EXTRACTION (Based on your debug image) ---
-                # data -> candidates (list) -> -> content (dict) -> parts (list) -> -> text (str)
-                briefing_text = data['candidates']['content']['parts']['text']
-                
-                st.session_state.weather_data = briefing_text
-                st.session_state.page = 'dashboard'
-                st.rerun()
+                # --- DEEP SEARCH EXTRACTION ---
+                if 'candidates' in data and len(data['candidates']) > 0:
+                    cand = data['candidates']
+                    if 'content' in cand and 'parts' in cand['content']:
+                        st.session_state.weather_data = cand['content']['parts']['text']
+                        st.session_state.page = 'dashboard'
+                        st.rerun()
+                else:
+                    st.error("The AI is over the horizon. Wait 5 seconds and try again!")
             except Exception as e:
-                st.error("The Potomac is choppy! Refresh and try once more.")
+                st.error(f"Technical Error: {e}")
 
 # --- SCREEN 4: DASHBOARD ---
 elif st.session_state.page == 'dashboard':
     st.title(f"Dashboard: {st.session_state.boat}")
     st.markdown("### 📡 Skipper's Briefing")
     st.markdown(st.session_state.weather_data)
+    st.divider()
     if st.button("START OVER"):
         st.session_state.page = 'home'
         st.rerun()
