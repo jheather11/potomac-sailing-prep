@@ -2,10 +2,10 @@ import streamlit as st
 from datetime import datetime
 import requests
 
-# --- 1. API SETUP (THE STABLE BETA PATH) ---
+# --- 1. API SETUP (THE MASTER KEY) ---
 API_KEY = st.secrets["GEMINI_API_KEY"]
-# Using the v1beta endpoint as it is currently the most reliable for 'Flash' models
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+# Using the Stable v1 endpoint with the generic model string
+API_URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={API_KEY}"
 
 # --- 2. STYLE ---
 st.markdown("""
@@ -62,6 +62,7 @@ elif st.session_state.page == 'input':
     if st.button("GET FORECAST"):
         with st.spinner("Gemini is analyzing Potomac conditions..."):
             try:
+                # We add a hint to the AI to use its internal search capabilities
                 payload = {
                     "contents": [{
                         "parts": [{
@@ -76,7 +77,7 @@ elif st.session_state.page == 'input':
                 response = requests.post(API_URL, json=payload)
                 data = response.json()
                 
-                # --- FINAL ROBUST UNPACKING ---
+                # --- ROBUST UNPACKING ---
                 if 'candidates' in data and len(data['candidates']) > 0:
                     candidate = data['candidates']
                     if 'content' in candidate and 'parts' in candidate['content']:
@@ -84,9 +85,10 @@ elif st.session_state.page == 'input':
                         st.session_state.page = 'dashboard'
                         st.rerun()
                 elif 'error' in data:
+                    # This will tell us if it's a model error or a key error
                     st.error(f"Gemini Error: {data['error']['message']}")
                 else:
-                    st.error("AI Busy. Please try 'GET FORECAST' again.")
+                    st.error("Connection successful, but no data returned. Please try again.")
                     
             except Exception as e:
                 st.error(f"Connection Failed: {e}")
