@@ -2,28 +2,37 @@ import streamlit as st
 import requests
 from datetime import datetime, timedelta
 
-# --- 1. CONFIG & STYLE ---
-st.set_page_config(page_title="DCA Lab - Dynamic", layout="centered")
+# --- 1. SETTINGS & STYLE ---
+st.set_page_config(page_title="DCA Forecast Beta", layout="centered")
 st.markdown("<style>.stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #004466; color: white; }</style>", unsafe_allow_html=True)
 
-# --- 2. DYNAMIC FETCHING ---
-def get_clean_data(lat, lon, start_hour):
-    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=temperature_2m,precipitation_probability,windspeed_10m,windgusts_10m,winddirection_10m&temperature_unit=fahrenheit&windspeed_unit=mph&timezone=America%2FNew_York"
-    res = requests.get(url).json()
-    # USGS Gauge Height (Little Falls)
-    try:
-        f_res = requests.get("https://waterservices.usgs.gov/nwis/iv/?format=json&sites=01646500&parameterCd=00065").json()
-        flow = f_res['value']['timeSeries']['values']['value']['value']
-    except: flow = "3.7"
-    return res, flow
-
-# --- 3. STATE ---
 if 'page' not in st.session_state: st.session_state.page = 'home'
 if 'boat' not in st.session_state: st.session_state.boat = None
+HOURS = [f"{i:02d}:00" for i in range(24)]
+
+# --- 2. DATA AUDITOR (NWS/USGS/NOAA) ---
+def fetch_ndfd_data(lat, lon):
+    # Fetching from NWS Forecast API (Points endpoint)
+    try:
+        points_url = f"https://api.weather.gov/points/{lat},{lon}"
+        forecast_url = requests.get(points_url).json()['properties']['forecastHourly']
+        data = requests.get(forecast_url).json()['properties']['periods']
+        
+        # USGS Water Data (Little Falls 01646500)
+        water_url = "https://waterservices.usgs.gov/nwis/iv/?format=json&sites=01646500&parameterCd=00065,00010"
+        w_data = requests.get(water_url).json()
+        height = w_data['value']['timeSeries']['values']['value']['value']
+        w_temp_c = w_data['value']['timeSeries']['values']['value']['value']
+        w_temp_f = (float(w_temp_c) * 9/5) + 32
+        
+        return data, height, round(w_temp_f)
+    except:
+        return None, "3.7", 52
 
 # --- SCREEN 1: HOME ---
 if st.session_state.page == 'home':
     st.title("⛵ Potomac River DCA Forecast")
+    st.subheader("Select Craft")
     if st.button("FLYING SCOTT - POTOMAC"):
         st.session_state.boat, st.session_state.page = "Flying Scott", 'gate'
         st.rerun()
@@ -43,59 +52,61 @@ elif st.session_state.page == 'gate':
         if c1 and c2 and c3: st.session_state.page = 'input'; st.rerun()
     if st.button("BACK"): st.session_state.page = 'home'; st.rerun()
 
-# --- SCREEN 3: INPUT ---
+# --- SCREEN 3: FLOAT PLAN ---
 elif st.session_state.page == 'input':
     st.title("Float Plan")
-    st.markdown("⚠️ *Forecasts up to 48-hours into the future only.*")
+    st.markdown("⚠️ *Note: This tool provides forecasts up to 48-hours into the future only.*")
     sel_date = st.date_input("Select Date", datetime.now())
     t_col1, t_col2 = st.columns(2)
-    with t_col1: start_t = st.selectbox("Start", range(24), index=13, format_func=lambda x: f"{x:02d}:00")
-    with t_col2: end_t = st.selectbox("End", range(24), index=18, format_func=lambda x: f"{x:02d}:00")
-    if st.button("GENERATE DASHBOARD"):
-        st.session_state.start_t, st.session_state.end_t, st.session_state.date = start_t, end_t, sel_date
+    with t_col1: start_t = st.selectbox("Start Time", HOURS, index=13)
+    with t_col2: end_t = st.selectbox("End Time", HOURS, index=18)
+    if st.button("VIEW DASHBOARD"):
+        st.session_state.sel_date, st.session_state.start_t, st.session_state.end_t = sel_date, start_t, end_t
         st.session_state.page = 'dashboard'; st.rerun()
+    if st.button("BACK"): st.session_state.page = 'gate'; st.rerun()
 
-# --- SCREEN 4: DASHBOARD (The Restoration) ---
+# --- SCREEN 4: DASHBOARD (Militant Audit) ---
 elif st.session_state.page == 'dashboard':
-    with st.spinner("Auditing..."):
-        data, flow_ft = get_clean_data(38.85, -77.04, st.session_state.start_t)
-        h = st.session_state.start_t
+    with st.spinner("Auditing NWS/USGS Data..."):
+        raw_weather, flow_ft, water_f = fetch_ndfd_data(38.85, -77.04)
         
-        # Data Extraction
-        w_speed = data['hourly']['windspeed_10m'][h]
-        w_gust = data['hourly']['windgusts_10m'][h]
-        w_dir_deg = data['hourly']['winddirection_10m'][h]
-        temp_a = data['hourly']['temperature_2m'][h]
-        rain_p = data['hourly']['precipitation_probability'][h]
+        # Filter for the selected hour
+        target_dt = datetime.combine(st.session_state.sel_date, datetime.strptime(st.session_state.start_t, "%H:%M").time())
+        period = next((p for p in raw_weather if datetime.fromisoformat(p['startTime'][:-6]) >= target_dt), raw_weather)
         
-        # Direction Logic
-        dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
-        w_dir = dirs[int((w_dir_deg + 22.5) / 45) % 8]
-
+        # Values
+        wind_val = int(period['windSpeed'].split(' '))
+        gust_val = int(period['windGust'].split(' ')) if period['windGust'] else wind_val
+        w_dir = period['windDirection']
+        temp_a = period['temperature']
+        precip = period.get('probabilityOfPrecipitation', {}).get('value', 0)
+        
         # Status Logic
         w_status = "🟢 GO"
         if st.session_state.boat == "Flying Scott":
-            if w_gust >= 19: w_status = "🔴 NO-GO"
-            elif w_gust >= 15: w_status = "🟡 CAUTION"
+            if gust_val >= 19: w_status = "🔴 NO-GO"
+            elif gust_val >= 15: w_status = "🟡 CAUTION"
         else:
-            if w_gust >= 29: w_status = "🔴 NO-GO"
-            elif w_gust >= 20: w_status = "🟡 CAUTION"
-        
-        r_status = "🔴 NO-GO" if rain_p > 70 else "🟡 CAUTION" if rain_p > 30 else "🟢 GO"
+            if gust_val >= 29: w_status = "🔴 NO-GO"
+            elif gust_val >= 20: w_status = "🟡 CAUTION"
+            
+        r_status = "🔴 NO-GO" if precip > 70 else "🟡 CAUTION" if precip > 30 else "🟢 GO"
+        wt_status = "🔴 NO-GO" if water_f < 54 else "🟡 CAUTION" if water_f < 60 else "🟢 GO"
 
         st.header(f"Briefing: {st.session_state.boat}")
-        st.caption(f"Snapshot: {st.session_state.date} | {st.session_state.start_t}:00 to {st.session_state.end_t}:00")
+        st.caption(f"Snapshot: {st.session_state.sel_date} | {st.session_state.start_t} to {st.session_state.end_t}")
 
-        # THE TABLE (Exact mirror of Static Gold)
         st.markdown(f"""
         | Metric | Value | Status |
         | :--- | :--- | :--- |
-        | **WIND** | {w_speed} mph {w_dir} | {w_status} |
-        | **GUSTS** | {w_gust} mph | {w_status} |
+        | **WIND** | {wind_val} mph {w_dir} | {w_status} |
+        | **GUSTS** | {gust_val} mph | {w_status} |
         | **TEMP (Air)** | {temp_a}°F | 🟢 GO |
+        | **TEMP (Water)** | {water_f}°F | {wt_status} |
         | **FLOW** | {flow_ft} ft | 🟢 GO |
-        | **RAIN** | {rain_p}% | {r_status} |
-        | **THUNDER** | -- (None) | 🟢 GO |
+        | **TIDES** | High/Low TBD (Ebbing) | 🟡 CAUTION |
+        | **RAIN** | {precip}% | {r_status} |
+        | **THUNDER** | {period['shortForecast']} | {"🔴 NO-GO" if "Thunder" in period['shortForecast'] else "🟢 GO"} |
         """)
 
         st.markdown("### CONSIDERATIONS")
@@ -103,7 +114,17 @@ elif st.session_state.page == 'dashboard':
         
         if st.session_state.boat == "Cruiser":
             st.write("* **Draft Warning:** Cruiser draws 3.5ft on a solid keel.")
-        if "🟡" in w_status:
-            st.write(f"* **Reefing Alert:** Gusts are high. Reefing is advised for {st.session_state.boat}.")
+        if "🟡" in w_status or "🔴" in w_status:
+            st.write(f"* **Wind Alert:** Gusts are {gust_val} mph. Reefing is advised for {st.session_state.boat} at designated thresholds.")
+        if wt_status != "🟢 GO":
+            st.write(f"* **Water Temp:** Water is {water_f}°F. Immersion risk is high.")
+        st.write("* **Tides:** Caution advised; check return window for depth/current at marina entrance.")
 
-    if st.button("NEW PLAN"): st.session_state.page = 'home'; st.rerun()
+    st.divider()
+    st.subheader("Share with Crew")
+    app_url = "https://potomac-dca-forecast.streamlit.app/" # Update to working share link
+    st.code(app_url, language=None)
+
+    if st.button("NEW PLAN"):
+        st.session_state.page = 'home'
+        st.rerun()
