@@ -1,5 +1,6 @@
 from datetime import datetime, date, time
 import re
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -12,6 +13,7 @@ st.set_page_config(page_title="Potomac Sail Prep (DCA)", layout="centered")
 # -----------------------------
 LAT = 38.8491
 LON = -77.0438
+EASTERN_TZ = ZoneInfo("America/New_York")
 
 NOAA_TIDES_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 NOAA_TIDE_STATION = "8594900"  # Washington, DC
@@ -54,9 +56,11 @@ def safe_get(url, params=None, timeout=25):
     return r
 
 
-def parse_iso_to_local_naive(dt_str):
-    # NWS timestamps include timezone offset; convert to local naive time for comparisons
-    return datetime.fromisoformat(dt_str).astimezone().replace(tzinfo=None)
+def parse_iso_to_eastern_naive(dt_str):
+    # Convert NWS timestamp to America/New_York, then strip tz info for local comparisons
+    dt = datetime.fromisoformat(dt_str)
+    dt_eastern = dt.astimezone(EASTERN_TZ)
+    return dt_eastern.replace(tzinfo=None)
 
 
 def compact_wind_dir(seq):
@@ -125,12 +129,12 @@ def extract_wind_range(wind_speed_raw):
 
 def infer_rain_bucket(short_forecast, detailed_forecast):
     txt = f"{short_forecast or ''} {detailed_forecast or ''}".lower()
+    if "slight chance" in txt:
+        return "SChc"
     if "likely" in txt:
         return "Likely"
     if "chance" in txt:
         return "Chc"
-    if "slight chance" in txt:
-        return "SChc"
     if "showers" in txt or "rain" in txt:
         return "Rain"
     return "--"
@@ -147,7 +151,6 @@ def infer_thunder_flag(short_forecast, detailed_forecast):
 # -----------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_nws_hourly_url(lat, lon):
-    # First call: point lookup
     data = safe_get(f"https://api.weather.gov/points/{lat},{lon}").json()
     return data["properties"]["forecastHourly"]
 
@@ -160,7 +163,7 @@ def fetch_nws_hourly_dataframe(lat, lon):
 
     rows = []
     for p in periods:
-        dt_obj = parse_iso_to_local_naive(p["startTime"])
+        dt_obj = parse_iso_to_eastern_naive(p["startTime"])
         wind_low, wind_high = extract_wind_range(p.get("windSpeed"))
 
         rows.append(
@@ -170,7 +173,7 @@ def fetch_nws_hourly_dataframe(lat, lon):
                 "wind_low_mph": wind_low,
                 "wind_high_mph": wind_high,
                 "wind_dir": p.get("windDirection"),
-                "gust_mph": None,  # NWS hourly API does not consistently provide gusts here
+                "gust_mph": None,  # API feed not reliably exposing this for this app
                 "pop_pct": p.get("probabilityOfPrecipitation", {}).get("value"),
                 "rain_code": infer_rain_bucket(
                     p.get("shortForecast", ""),
@@ -286,11 +289,13 @@ def summarize_weather_window(window_df, craft):
     if window_df.empty:
         raise ValueError("No hourly forecast rows found for the selected date/time window.")
 
+    # TEMP
     temp_min = int(window_df["temp_f"].min()) if window_df["temp_f"].notna().any() else None
     temp_max = int(window_df["temp_f"].max()) if window_df["temp_f"].notna().any() else None
     temp_text = range_text(temp_min, temp_max, "F")
     temp_status = "GO" if (temp_max is not None and temp_max >= 45) else "CAUTION"
 
+    # WIND
     low_vals = window_df["wind_low_mph"].dropna().astype(int)
     high_vals = window_df["wind_high_mph"].dropna().astype(int)
 
@@ -301,21 +306,35 @@ def summarize_weather_window(window_df, craft):
     wind_text = f"{range_text(wind_min, wind_max, ' mph')}, {wind_dir_text}"
     wind_status = "CAUTION" if (wind_max is not None and wind_max >= 18) else "GO"
 
-    # Gusts are not consistently exposed in the official hourly endpoint for this use case.
-    # Keep the row, but mark as unavailable for now.
-    gust_text = "Not available from current API feed"
-    gust_status = "CAUTION"
+    # GUSTS
+    gust_text = "None Reported"
+    gust_status = "GO"
 
-    pop_max = int(window_df["pop_pct"].max()) if window_df["pop_pct"].notna().any() else 0
+    # RAIN
+    pop_series = window_df["pop_pct"].dropna()
+    pop_max = int(pop_series.max()) if not pop_series.empty else 0
     rain_desc = unique_join(window_df["rain_code"].tolist())
-    rain_text = f"{rain_desc} ({pop_max}% max precip potential)" if rain_desc else f"{pop_max}% max precip potential"
-    rain_status = "CAUTION" if pop_max >= 30 else "GO"
 
+    if pop_max == 0 and rain_desc == "":
+        rain_text = "None Reported"
+        rain_status = "GO"
+    elif pop_max == 0 and rain_desc in ("", "--"):
+        rain_text = "None Reported"
+        rain_status = "GO"
+    else:
+        rain_text = f"{rain_desc} ({pop_max}% max precip potential)" if rain_desc else f"{pop_max}% max precip potential"
+        rain_status = "CAUTION" if pop_max >= 30 else "GO"
+
+    # THUNDER
     thunder_present = any(
         str(x).strip() not in ("", "--") for x in window_df["thunder_code"].tolist()
     )
-    thunder_text = unique_join(window_df["thunder_code"].tolist()) if thunder_present else "--"
-    thunder_status = "NO-GO" if thunder_present else "GO"
+    if thunder_present:
+        thunder_text = unique_join(window_df["thunder_code"].tolist())
+        thunder_status = "NO-GO"
+    else:
+        thunder_text = "None Reported"
+        thunder_status = "GO"
 
     return {
         "Temp": (temp_text, temp_status),
@@ -507,15 +526,8 @@ elif st.session_state.slide == 4:
 
     thunder_status = row_lookup.get("Thunder", {}).get("Status", "")
     wind_status = row_lookup.get("Wind", {}).get("Status", "")
-    gust_status = row_lookup.get("Gusts", {}).get("Status", "")
     flow_status = row_lookup.get("Flow", {}).get("Status", "")
     rain_status = row_lookup.get("Rain", {}).get("Status", "")
-
-    if "NO-GO" in thunder_status:
-        notes.append("General Safety: Thunder appears in the selected forecast window.")
-
-    if "CAUTION" in gust_status:
-        notes.append("Gusts: Current API feed does not expose a reliable gust value here, so verify gusts in the SCOW weather links.")
 
     if "CAUTION" in wind_status:
         notes.append("Wind: Sustained winds may still create chop, especially on wider river sections.")
@@ -527,6 +539,9 @@ elif st.session_state.slide == 4:
 
     if "CAUTION" in rain_status:
         notes.append("Rain: Showers or elevated precipitation chances may reduce comfort and visibility.")
+
+    if "NO-GO" in thunder_status:
+        notes.append("General Safety: Thunder appears in the selected forecast window.")
 
     if not notes:
         notes.append("Conditions look generally favorable across the selected metrics.")
