@@ -345,21 +345,19 @@ def summarize_tides(tides_df, start_dt, end_dt):
     if tides_df.empty:
         return "No tide data", "CAUTION", None
 
-    tides_df = tides_df.sort_values("dt")
+    tides_df = tides_df.sort_values("dt").copy()
 
+    def nearest_tide(df, target_dt):
+        tmp = df.copy()
+        tmp["delta_sec"] = (tmp["dt"] - target_dt).abs().dt.total_seconds()
+        return tmp.sort_values(["delta_sec", "dt"]).iloc[0]
+
+    dep_row = nearest_tide(tides_df, start_dt)
+    ret_row = nearest_tide(tides_df, end_dt)
+
+    # Determine tide phase at departure using surrounding tides
     before_start = tides_df[tides_df["dt"] <= start_dt].tail(1)
     after_start = tides_df[tides_df["dt"] > start_dt].head(1)
-    after_end = tides_df[tides_df["dt"] > end_dt].head(1)
-
-    def fmt_row(r):
-        label = "H" if r["type"] == "H" else "L"
-        return f"{label}: {fmt_ampm(r['dt'])} ({r['height_ft']:.1f} ft)"
-
-    parts = []
-    if not before_start.empty:
-        parts.append(fmt_row(before_start.iloc[0]))
-    if not after_end.empty:
-        parts.append(fmt_row(after_end.iloc[0]))
 
     tide_phase = None
     if not before_start.empty and not after_start.empty:
@@ -370,7 +368,12 @@ def summarize_tides(tides_df, start_dt, end_dt):
         elif prev_type == "L" and next_type == "H":
             tide_phase = "flood"
 
-    return " / ".join(parts), "GO", tide_phase
+    def fmt_row(r):
+        label = "H" if r["type"] == "H" else "L"
+        return f"{label}: {fmt_ampm(r['dt'])} ({r['height_ft']:.1f} ft)"
+
+    tide_text = f"{fmt_row(dep_row)} / {fmt_row(ret_row)}"
+    return tide_text, "GO", tide_phase
 
 
 def summarize_stage(current_stage, tide_phase, typical_stage=TYPICAL_STAGE_FT):
