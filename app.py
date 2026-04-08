@@ -356,22 +356,16 @@ def summarize_tides(tides_df, start_dt, end_dt):
     after_end = tides_df[tides_df["dt"] > end_dt].head(1)
 
     def fmt_row(r):
-        label = "High" if r["type"] == "H" else "Low"
-        return f"{label} @ {fmt_ampm(r['dt'])} ({r['height_ft']:.1f} ft)"
+        label = "H" if r["type"] == "H" else "L"
+        return f"{label}: {fmt_ampm(r['dt'])} ({r['height_ft']:.1f} ft)"
 
     parts = []
 
     if not before_start.empty:
-        parts.append(f"Departing: {fmt_row(before_start.iloc[0])}")
-
-    if not after_start.empty:
-        parts.append(f"Next: {fmt_row(after_start.iloc[0])}")
+        parts.append(fmt_row(before_start.iloc[0]))
 
     if not after_end.empty:
-        next_after_start_dt = after_start.iloc[0]["dt"] if not after_start.empty else None
-        next_after_end_dt = after_end.iloc[0]["dt"]
-        if next_after_start_dt is None or next_after_end_dt != next_after_start_dt:
-            parts.append(f"Return: {fmt_row(after_end.iloc[0])}")
+        parts.append(fmt_row(after_end.iloc[0]))
 
     tide_phase = None
     if not before_start.empty and not after_start.empty:
@@ -383,7 +377,7 @@ def summarize_tides(tides_df, start_dt, end_dt):
         elif prev_type == "L" and next_type == "H":
             tide_phase = "flood"
 
-    return "; ".join(parts), "GO", tide_phase
+    return " / ".join(parts), "GO", tide_phase
 
 
 def summarize_stage(current_stage, tide_phase, typical_stage=TYPICAL_STAGE_FT):
@@ -628,7 +622,7 @@ elif st.session_state.slide == 3:
                         {"Metric": "Gusts", "Value": weather["Gusts"][0], "Status": status_dot(weather["Gusts"][1])},
                         {"Metric": "Temp", "Value": weather["Temp"][0], "Status": status_dot(weather["Temp"][1])},
                         {"Metric": "Flow", "Value": stage_text, "Status": status_dot(stage_status)},
-                        {"Metric": "Tides", "Value": tide_text, "Status": status_dot(tide_status)},
+                        {"Metric": "Tides (Dep./Ret.)", "Value": tide_text, "Status": status_dot(tide_status)},
                         {"Metric": "Rain", "Value": weather["Rain"][0], "Status": status_dot(weather["Rain"][1])},
                         {"Metric": "Thunder", "Value": weather["Thunder"][0], "Status": status_dot(weather["Thunder"][1])},
                     ]
