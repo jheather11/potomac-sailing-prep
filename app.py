@@ -1,10 +1,9 @@
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time
 import re
 
 import pandas as pd
 import requests
 import streamlit as st
-from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="Potomac Sail Prep (DCA)", layout="centered")
 
@@ -13,12 +12,6 @@ st.set_page_config(page_title="Potomac Sail Prep (DCA)", layout="centered")
 # -----------------------------
 LAT = 38.8491
 LON = -77.0438
-
-NWS_DIGITAL_URL = (
-    "https://forecast.weather.gov/MapClick.php"
-    "?w3=sfcwind&w3u=1&w13u=0&w16u=1&AheadHour=0&Submit=Submit"
-    f"&FcstType=digital&textField1={LAT}&textField2={LON}&site=all&unit=0&dd=&bw="
-)
 
 NOAA_TIDES_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 NOAA_TIDE_STATION = "8594900"  # Washington, DC
@@ -48,6 +41,9 @@ if "overall_status" not in st.session_state:
 if "briefing_meta" not in st.session_state:
     st.session_state.briefing_meta = None
 
+if "debug_rows" not in st.session_state:
+    st.session_state.debug_rows = None
+
 
 # -----------------------------
 # HELPERS
@@ -58,23 +54,9 @@ def safe_get(url, params=None, timeout=25):
     return r
 
 
-def clean_text(value):
-    if value is None:
-        return ""
-    return re.sub(r"\s+", " ", str(value)).strip()
-
-
-def normalize_label(label):
-    s = clean_text(label).lower()
-    s = s.replace("°", "")
-    return s
-
-
-def parse_numeric(value):
-    if value is None:
-        return None
-    m = re.search(r"-?\d+(\.\d+)?", str(value))
-    return float(m.group()) if m else None
+def parse_iso_to_local_naive(dt_str):
+    # NWS timestamps include timezone offset; convert to local naive time for comparisons
+    return datetime.fromisoformat(dt_str).astimezone().replace(tzinfo=None)
 
 
 def compact_wind_dir(seq):
@@ -126,100 +108,84 @@ def unique_join(values):
     return " / ".join(s.tolist())
 
 
+def extract_wind_range(wind_speed_raw):
+    """
+    NWS examples:
+    - '17 mph'
+    - '10 to 15 mph'
+    """
+    txt = str(wind_speed_raw or "").strip()
+    nums = [int(x) for x in re.findall(r"\d+", txt)]
+    if len(nums) >= 2:
+        return nums[0], nums[1]
+    if len(nums) == 1:
+        return nums[0], nums[0]
+    return None, None
+
+
+def infer_rain_bucket(short_forecast, detailed_forecast):
+    txt = f"{short_forecast or ''} {detailed_forecast or ''}".lower()
+    if "likely" in txt:
+        return "Likely"
+    if "chance" in txt:
+        return "Chc"
+    if "slight chance" in txt:
+        return "SChc"
+    if "showers" in txt or "rain" in txt:
+        return "Rain"
+    return "--"
+
+
+def infer_thunder_flag(short_forecast, detailed_forecast):
+    txt = f"{short_forecast or ''} {detailed_forecast or ''}".lower()
+    terms = ["thunderstorm", "thunderstorms", "t-storm", "tstorms", "thunder"]
+    return any(term in txt for term in terms)
+
+
 # -----------------------------
 # DATA FETCHING
 # -----------------------------
-@st.cache_data(ttl=900, show_spinner=False)
-def fetch_nws_digital_dataframe():
-    html = safe_get(NWS_DIGITAL_URL).text
-    soup = BeautifulSoup(html, "html.parser")
-    tables = soup.find_all("table")
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_nws_hourly_url(lat, lon):
+    # First call: point lookup
+    data = safe_get(f"https://api.weather.gov/points/{lat},{lon}").json()
+    return data["properties"]["forecastHourly"]
 
-    target_rows = None
 
-    for table in tables:
-        rows = []
-        for tr in table.find_all("tr"):
-            cells = tr.find_all(["th", "td"])
-            row = [clean_text(c.get_text(" ", strip=True)) for c in cells]
-            row = [x for x in row if x]
-            if row:
-                rows.append(row)
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_nws_hourly_dataframe(lat, lon):
+    hourly_url = get_nws_hourly_url(lat, lon)
+    data = safe_get(hourly_url).json()
+    periods = data["properties"]["periods"]
 
-        flat = " ".join(" ".join(r) for r in rows).lower()
-        if (
-            "hour (edt)" in flat
-            and "surface wind" in flat
-            and "wind dir" in flat
-            and "gust" in flat
-        ):
-            target_rows = rows
-            break
+    rows = []
+    for p in periods:
+        dt_obj = parse_iso_to_local_naive(p["startTime"])
+        wind_low, wind_high = extract_wind_range(p.get("windSpeed"))
 
-    if not target_rows:
-        raise ValueError("Could not find NWS digital forecast table.")
-
-    rowmap = {}
-    for row in target_rows:
-        rowmap[normalize_label(row[0])] = row[1:]
-
-    if "hour (edt)" not in rowmap or "date" not in rowmap:
-        raise ValueError("NWS digital table missing Date or Hour rows.")
-
-    hours = rowmap["hour (edt)"]
-    date_vals = rowmap["date"]
-
-    start_date_token = clean_text(date_vals[0])
-    month, day = map(int, start_date_token.split("/"))
-    year = datetime.now().year
-    day_cursor = date(year, month, day)
-
-    def get_row(*keys):
-        for key in keys:
-            if key in rowmap:
-                vals = rowmap[key]
-                if len(vals) < len(hours):
-                    vals = vals + [""] * (len(hours) - len(vals))
-                return vals[:len(hours)]
-        return [""] * len(hours)
-
-    temps = get_row("temperature (f)", "temperature")
-    winds = get_row("surface wind (mph)", "surface wind")
-    wind_dirs = get_row("wind dir")
-    gusts = get_row("gust")
-    pops = get_row("precipitation potential (%)", "precipitation potential")
-    rain = get_row("rain")
-    thunder = get_row("thunder")
-
-    records = []
-    prev_hour = None
-
-    for i, hr in enumerate(hours):
-        hr = clean_text(hr)
-        if not hr.isdigit():
-            continue
-
-        hour_num = int(hr)
-
-        if prev_hour is not None and hour_num < prev_hour:
-            day_cursor = day_cursor + timedelta(days=1)
-        prev_hour = hour_num
-
-        records.append(
+        rows.append(
             {
-                "dt": datetime.combine(day_cursor, time(hour=hour_num)),
-                "temp_f": parse_numeric(temps[i]),
-                "wind_mph": parse_numeric(winds[i]),
-                "wind_dir": clean_text(wind_dirs[i]),
-                "gust_mph": parse_numeric(gusts[i]),
-                "pop_pct": parse_numeric(pops[i]),
-                "rain_code": clean_text(rain[i]),
-                "thunder_code": clean_text(thunder[i]),
+                "dt": dt_obj,
+                "temp_f": p.get("temperature"),
+                "wind_low_mph": wind_low,
+                "wind_high_mph": wind_high,
+                "wind_dir": p.get("windDirection"),
+                "gust_mph": None,  # NWS hourly API does not consistently provide gusts here
+                "pop_pct": p.get("probabilityOfPrecipitation", {}).get("value"),
+                "rain_code": infer_rain_bucket(
+                    p.get("shortForecast", ""),
+                    p.get("detailedForecast", "")
+                ),
+                "thunder_code": "Thunder" if infer_thunder_flag(
+                    p.get("shortForecast", ""),
+                    p.get("detailedForecast", "")
+                ) else "--",
+                "short_forecast": p.get("shortForecast", ""),
+                "detailed_forecast": p.get("detailedForecast", ""),
             }
         )
 
-    df = pd.DataFrame(records).sort_values("dt").reset_index(drop=True)
-    return df
+    return pd.DataFrame(rows).sort_values("dt").reset_index(drop=True)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -318,38 +284,27 @@ def summarize_flow(current_cfs):
 
 def summarize_weather_window(window_df, craft):
     if window_df.empty:
-        raise ValueError("No hourly NWS forecast rows found for the selected date/time window.")
+        raise ValueError("No hourly forecast rows found for the selected date/time window.")
 
     temp_min = int(window_df["temp_f"].min()) if window_df["temp_f"].notna().any() else None
     temp_max = int(window_df["temp_f"].max()) if window_df["temp_f"].notna().any() else None
     temp_text = range_text(temp_min, temp_max, "F")
     temp_status = "GO" if (temp_max is not None and temp_max >= 45) else "CAUTION"
 
-    wind_min = int(window_df["wind_mph"].min()) if window_df["wind_mph"].notna().any() else None
-    wind_max = int(window_df["wind_mph"].max()) if window_df["wind_mph"].notna().any() else None
-    gust_max = int(window_df["gust_mph"].max()) if window_df["gust_mph"].notna().any() else None
+    low_vals = window_df["wind_low_mph"].dropna().astype(int)
+    high_vals = window_df["wind_high_mph"].dropna().astype(int)
+
+    wind_min = int(low_vals.min()) if not low_vals.empty else None
+    wind_max = int(high_vals.max()) if not high_vals.empty else None
     wind_dir_text = compact_wind_dir(window_df["wind_dir"].tolist())
 
     wind_text = f"{range_text(wind_min, wind_max, ' mph')}, {wind_dir_text}"
     wind_status = "CAUTION" if (wind_max is not None and wind_max >= 18) else "GO"
 
-    if craft == "CRUISER - POTOMAC":
-        yellow_gust = 20
-        red_gust = 29
-    else:  # FLYING SCOT - POTOMAC
-        yellow_gust = 15
-        red_gust = 19
-
-    gust_text = f"{gust_max} mph" if gust_max is not None else "No data"
-
-    if gust_max is None:
-        gust_status = "CAUTION"
-    elif gust_max >= red_gust:
-        gust_status = "NO-GO"
-    elif gust_max >= yellow_gust:
-        gust_status = "CAUTION"
-    else:
-        gust_status = "GO"
+    # Gusts are not consistently exposed in the official hourly endpoint for this use case.
+    # Keep the row, but mark as unavailable for now.
+    gust_text = "Not available from current API feed"
+    gust_status = "CAUTION"
 
     pop_max = int(window_df["pop_pct"].max()) if window_df["pop_pct"].notna().any() else 0
     rain_desc = unique_join(window_df["rain_code"].tolist())
@@ -395,7 +350,6 @@ div.stButton > button {
 """,
     unsafe_allow_html=True,
 )
-
 
 # -----------------------------
 # SLIDE 1
@@ -475,7 +429,7 @@ elif st.session_state.slide == 3:
                     end_dt = datetime.combine(selected_date, end_time)
 
                     with st.spinner("Retrieving forecast data..."):
-                        weather_df = fetch_nws_digital_dataframe()
+                        weather_df = fetch_nws_hourly_dataframe(LAT, LON)
                         window_df = weather_df[
                             (weather_df["dt"] >= start_dt) &
                             (weather_df["dt"] <= end_dt)
@@ -483,7 +437,8 @@ elif st.session_state.slide == 3:
 
                         if window_df.empty:
                             raise ValueError(
-                                "No hourly NWS forecast rows found for that date/time window."
+                                "No hourly forecast rows found for that date/time window. "
+                                "Try a nearer date/time."
                             )
 
                         tides_df = fetch_tides_for_day(selected_date)
@@ -516,6 +471,7 @@ elif st.session_state.slide == 3:
 
                     st.session_state.forecast_rows = rows
                     st.session_state.overall_status = overall
+                    st.session_state.debug_rows = window_df.copy()
                     st.session_state.briefing_meta = {
                         "craft": st.session_state.craft,
                         "selected_date": selected_date.strftime("%Y-%m-%d"),
@@ -558,10 +514,8 @@ elif st.session_state.slide == 4:
     if "NO-GO" in thunder_status:
         notes.append("General Safety: Thunder appears in the selected forecast window.")
 
-    if "NO-GO" in gust_status:
-        notes.append("Gusts: Peak gusts are in the no-go range for this craft.")
-    elif "CAUTION" in gust_status:
-        notes.append("Gusts: Peak gusts are in the caution range for this craft.")
+    if "CAUTION" in gust_status:
+        notes.append("Gusts: Current API feed does not expose a reliable gust value here, so verify gusts in the SCOW weather links.")
 
     if "CAUTION" in wind_status:
         notes.append("Wind: Sustained winds may still create chop, especially on wider river sections.")
@@ -580,6 +534,13 @@ elif st.session_state.slide == 4:
     for note in notes:
         st.markdown(f"- {note}")
 
+    with st.expander("Debug: hourly rows used"):
+        dbg = st.session_state.debug_rows
+        if dbg is not None and not dbg.empty:
+            show = dbg.copy()
+            show["dt"] = show["dt"].astype(str)
+            st.dataframe(show, use_container_width=True, hide_index=True)
+
     col1, col2 = st.columns(2)
     with col1:
         if st.button("BACK"):
@@ -592,4 +553,5 @@ elif st.session_state.slide == 4:
             st.session_state.forecast_rows = None
             st.session_state.overall_status = None
             st.session_state.briefing_meta = None
+            st.session_state.debug_rows = None
             st.rerun()
