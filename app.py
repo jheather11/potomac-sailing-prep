@@ -1,5 +1,4 @@
-from datetime import datetime, date, time, timedelta
-from io import StringIO
+from datetime import datetime, date, time
 from zoneinfo import ZoneInfo
 import re
 import xml.etree.ElementTree as ET
@@ -21,8 +20,6 @@ NOAA_TIDES_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 NOAA_TIDE_STATION = "8594900"  # Washington, DC
 
 USGS_IV_URL = "https://waterservices.usgs.gov/nwis/iv/"
-USGS_STATS_URL = "https://waterservices.usgs.gov/nwis/stat/"
-USGS_DV_URL = "https://waterservices.usgs.gov/nwis/dv/"
 USGS_SITE = "01646500"  # Little Falls
 
 NDFD_XML_URL = "https://digital.weather.gov/xml/sample_products/browser_interface/ndfdXMLclient.php"
@@ -30,6 +27,9 @@ NDFD_XML_URL = "https://digital.weather.gov/xml/sample_products/browser_interfac
 HEADERS = {
     "User-Agent": "PotomacDCAForecast/1.0"
 }
+
+# Static reference stage for operational comparison
+TYPICAL_STAGE_FT = 3.5
 
 # -----------------------------
 # SESSION STATE
@@ -157,62 +157,6 @@ def parse_numeric(value):
         return None
     m = re.search(r"-?\d+(\.\d+)?", str(value))
     return float(m.group(0)) if m else None
-
-
-def parse_usgs_rdb(text: str) -> pd.DataFrame:
-    """
-    Parse USGS RDB text safely.
-    USGS RDB commonly has:
-      - comment lines beginning with '#'
-      - one header row
-      - one type-spec row immediately after header
-      - data rows thereafter
-    """
-    lines = []
-    for ln in text.splitlines():
-        if not ln.strip():
-            continue
-        if ln.startswith("#"):
-            continue
-        lines.append(ln)
-
-    if len(lines) < 3:
-        return pd.DataFrame()
-
-    header = lines[0].split("\t")
-    data_lines = lines[2:]  # skip the type-spec row
-
-    rows = []
-    for ln in data_lines:
-        parts = ln.split("\t")
-        if len(parts) < len(header):
-            parts.extend([""] * (len(header) - len(parts)))
-        elif len(parts) > len(header):
-            parts = parts[:len(header)]
-        rows.append(parts)
-
-    if not rows:
-        return pd.DataFrame(columns=header)
-
-    return pd.DataFrame(rows, columns=header)
-
-
-def first_matching_column(columns, preferred_names=None, regexes=None):
-    preferred_names = preferred_names or []
-    regexes = regexes or []
-
-    cols = list(columns)
-
-    for name in preferred_names:
-        if name in cols:
-            return name
-
-    for rgx in regexes:
-        for col in cols:
-            if re.fullmatch(rgx, col):
-                return col
-
-    return None
 
 
 # -----------------------------
@@ -363,7 +307,7 @@ def fetch_tides_for_day(selected_date):
 
 
 # -----------------------------
-# USGS STAGE + DAILY AVG
+# USGS STAGE
 # -----------------------------
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_usgs_current_stage():
@@ -386,161 +330,12 @@ def fetch_usgs_current_stage():
     return float(latest["value"])
 
 
-def _fetch_usgs_stage_daily_average_from_stats(selected_date):
-    """
-    Preferred source:
-    USGS stats service daily mean for month/day climatology.
-    Robust to slight differences in accepted argument names and output columns.
-    """
-    candidate_param_sets = [
-        {
-            "format": "rdb",
-            "sites": USGS_SITE,
-            "parameterCd": "00065",
-            "statReportType": "daily",
-            "statType": "mean",
-        },
-        {
-            "format": "rdb",
-            "site": USGS_SITE,
-            "parameterCd": "00065",
-            "statReportType": "daily",
-            "statType": "mean",
-        },
-        {
-            "format": "rdb",
-            "sites": USGS_SITE,
-            "parameterCd": "00065",
-            "statReportType": "daily",
-            "statTypeCd": "mean",
-        },
-        {
-            "format": "rdb",
-            "site": USGS_SITE,
-            "parameterCd": "00065",
-            "statReportType": "daily",
-            "statTypeCd": "mean",
-        },
-    ]
-
-    for params in candidate_param_sets:
-        try:
-            text = safe_get(USGS_STATS_URL, params=params, timeout=25).text
-            df = parse_usgs_rdb(text)
-            if df.empty:
-                continue
-
-            month_col = first_matching_column(
-                df.columns,
-                preferred_names=["month_nu"],
-                regexes=[r".*month.*"]
-            )
-            day_col = first_matching_column(
-                df.columns,
-                preferred_names=["day_nu"],
-                regexes=[r".*day.*"]
-            )
-            mean_col = first_matching_column(
-                df.columns,
-                preferred_names=["mean_va"],
-                regexes=[r"mean.*_va", r".*mean.*"]
-            )
-
-            if not month_col or not day_col or not mean_col:
-                continue
-
-            tmp = df.copy()
-            tmp[month_col] = pd.to_numeric(tmp[month_col], errors="coerce")
-            tmp[day_col] = pd.to_numeric(tmp[day_col], errors="coerce")
-            tmp[mean_col] = pd.to_numeric(tmp[mean_col], errors="coerce")
-            tmp = tmp.dropna(subset=[month_col, day_col, mean_col])
-
-            match = tmp[
-                (tmp[month_col] == selected_date.month) &
-                (tmp[day_col] == selected_date.day)
-            ]
-
-            if match.empty:
-                continue
-
-            val = float(match.iloc[0][mean_col])
-            if pd.notna(val):
-                return val
-        except Exception:
-            continue
-
-    return None
-
-
-def _fetch_usgs_stage_daily_average_from_dv(selected_date):
-    """
-    Fallback source:
-    If stats service does not yield a climatology value, use the daily values service
-    for the exact selected date when available. This is most useful for past dates.
-    """
-    try:
-        params = {
-            "format": "json",
-            "sites": USGS_SITE,
-            "parameterCd": "00065",
-            "startDT": selected_date.strftime("%Y-%m-%d"),
-            "endDT": selected_date.strftime("%Y-%m-%d"),
-            "siteStatus": "all",
-        }
-        data = safe_get(USGS_DV_URL, params=params, timeout=25).json()
-        series = data.get("value", {}).get("timeSeries", [])
-        if not series:
-            return None
-
-        for ts in series:
-            variable_code = (
-                ts.get("variable", {})
-                .get("variableCode", [{}])[0]
-                .get("value")
-            )
-            if variable_code != "00065":
-                continue
-
-            values_blocks = ts.get("values", [])
-            for block in values_blocks:
-                for row in block.get("value", []):
-                    val = parse_numeric(row.get("value"))
-                    if val is not None:
-                        return float(val)
-    except Exception:
-        return None
-
-    return None
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_usgs_stage_daily_average(selected_date):
-    """
-    Return a daily average gage-height value for the selected date.
-
-    Preferred behavior:
-    - Use USGS stats service daily mean (month/day climatology) for reliability across dates,
-      including future dates in the same month/day test case pattern.
-    Fallback:
-    - If stats service is blank/unavailable, use daily values for the exact date when possible.
-    """
-    avg_stage = _fetch_usgs_stage_daily_average_from_stats(selected_date)
-    if avg_stage is not None:
-        return avg_stage
-
-    avg_stage = _fetch_usgs_stage_daily_average_from_dv(selected_date)
-    if avg_stage is not None:
-        return avg_stage
-
-    return None
-
-
 # -----------------------------
 # SUMMARIES
 # -----------------------------
 def summarize_tides(tides_df, start_dt):
     if tides_df.empty:
-        return "No tide data", "CAUTION"
+        return "No tide data", "CAUTION", None
 
     highs = tides_df[tides_df["type"] == "H"]
     lows = tides_df[tides_df["type"] == "L"]
@@ -553,6 +348,17 @@ def summarize_tides(tides_df, start_dt):
     if next_low.empty and not lows.empty:
         next_low = lows.tail(1)
 
+    next_high_dt = next_high.iloc[0]["dt"] if not next_high.empty else None
+    next_low_dt = next_low.iloc[0]["dt"] if not next_low.empty else None
+
+    tide_phase = None
+    if next_low_dt is not None and next_high_dt is not None:
+        tide_phase = "ebb" if next_low_dt <= next_high_dt else "flood"
+    elif next_low_dt is not None:
+        tide_phase = "ebb"
+    elif next_high_dt is not None:
+        tide_phase = "flood"
+
     parts = []
     if not next_high.empty:
         r = next_high.iloc[0]
@@ -561,22 +367,33 @@ def summarize_tides(tides_df, start_dt):
         r = next_low.iloc[0]
         parts.append(f"Low: ~{fmt_ampm(r['dt'])} ({r['height_ft']:+.1f} ft)")
 
-    return "; ".join(parts), "GO"
+    return "; ".join(parts), "GO", tide_phase
 
 
-def summarize_stage(current_stage, avg_stage):
+def summarize_stage(current_stage, tide_phase, typical_stage=TYPICAL_STAGE_FT):
     if current_stage is None:
         return "Potomac (Little Falls): No data", "CAUTION"
+
+    flags = []
 
     if current_stage >= 6.0:
         status = "NO-GO"
     elif current_stage >= 4.5:
         status = "CAUTION"
+        flags.append("High water")
+    elif current_stage < 2.5:
+        status = "CAUTION"
+        if tide_phase == "ebb":
+            flags.append("Low water + ebb")
+        else:
+            flags.append("Low water")
     else:
         status = "GO"
 
-    avg_txt = f"{avg_stage:.1f}" if avg_stage is not None else "--"
-    text = f"Potomac (Little Falls): {current_stage:.1f}ft (avg={avg_txt})"
+    text = f"Potomac (Little Falls): {current_stage:.1f}ft (typical={typical_stage:.1f})"
+    if flags:
+        text += f" | {' / '.join(flags)}"
+
     return text, status
 
 
@@ -783,11 +600,10 @@ elif st.session_state.slide == 3:
 
                         tides_df = fetch_tides_for_day(selected_date)
                         current_stage = fetch_usgs_current_stage()
-                        avg_stage = fetch_usgs_stage_daily_average(selected_date)
 
                     weather = summarize_weather_window(window_df, st.session_state.craft)
-                    tide_text, tide_status = summarize_tides(tides_df, start_dt)
-                    stage_text, stage_status = summarize_stage(current_stage, avg_stage)
+                    tide_text, tide_status, tide_phase = summarize_tides(tides_df, start_dt)
+                    stage_text, stage_status = summarize_stage(current_stage, tide_phase)
 
                     rows = [
                         {"Metric": "Wind", "Value": weather["Wind"][0], "Status": status_dot(weather["Wind"][1])},
@@ -850,6 +666,7 @@ elif st.session_state.slide == 4:
     wind_status = row_lookup.get("Wind", {}).get("Status", "")
     gust_status = row_lookup.get("Gusts", {}).get("Status", "")
     flow_status = row_lookup.get("Flow", {}).get("Status", "")
+    flow_value = row_lookup.get("Flow", {}).get("Value", "")
     rain_status = row_lookup.get("Rain", {}).get("Status", "")
 
     if "NO-GO" in thunder_status:
@@ -866,7 +683,12 @@ elif st.session_state.slide == 4:
     if "NO-GO" in flow_status:
         notes.append("River level: Little Falls stage is very high.")
     elif "CAUTION" in flow_status:
-        notes.append("River level: Little Falls stage is elevated above typical easy conditions.")
+        if "Low water + ebb" in flow_value:
+            notes.append("River level: Low water combined with ebb tide may increase grounding risk and make handling trickier in shallow areas.")
+        elif "Low water" in flow_value:
+            notes.append("River level: Low water may reduce depth margins in shallow areas.")
+        else:
+            notes.append("River level: Little Falls stage is elevated above typical easy conditions.")
 
     if "CAUTION" in rain_status:
         notes.append("Rain: Showers or elevated precipitation chances may reduce comfort and visibility.")
