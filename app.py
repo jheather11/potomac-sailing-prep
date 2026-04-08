@@ -159,6 +159,18 @@ def parse_numeric(value):
     return float(m.group(0)) if m else None
 
 
+def summarize_forecast_confidence(selected_date):
+    today_local = datetime.now(EASTERN_TZ).date()
+    days_out = (selected_date - today_local).days
+
+    if days_out <= 1:
+        return "HIGH", "GO"
+    elif days_out <= 4:
+        return "MEDIUM", "CAUTION"
+    else:
+        return "LOW", "CAUTION"
+
+
 # -----------------------------
 # NWS API WEATHER
 # -----------------------------
@@ -358,8 +370,6 @@ def summarize_tides(tides_df, start_dt, end_dt):
     if not after_end.empty:
         next_after_start_dt = after_start.iloc[0]["dt"] if not after_start.empty else None
         next_after_end_dt = after_end.iloc[0]["dt"]
-
-        # Avoid repeating the same tide as both Next and Return
         if next_after_start_dt is None or next_after_end_dt != next_after_start_dt:
             parts.append(f"Return: {fmt_row(after_end.iloc[0])}")
 
@@ -607,11 +617,13 @@ elif st.session_state.slide == 3:
                         tides_df = fetch_tides_for_day(selected_date)
                         current_stage = fetch_usgs_current_stage()
 
+                    confidence_text, confidence_status = summarize_forecast_confidence(selected_date)
                     weather = summarize_weather_window(window_df, st.session_state.craft)
                     tide_text, tide_status, tide_phase = summarize_tides(tides_df, start_dt, end_dt)
                     stage_text, stage_status = summarize_stage(current_stage, tide_phase)
 
                     rows = [
+                        {"Metric": "Confidence", "Value": confidence_text, "Status": status_dot(confidence_status)},
                         {"Metric": "Wind", "Value": weather["Wind"][0], "Status": status_dot(weather["Wind"][1])},
                         {"Metric": "Gusts", "Value": weather["Gusts"][0], "Status": status_dot(weather["Gusts"][1])},
                         {"Metric": "Temp", "Value": weather["Temp"][0], "Status": status_dot(weather["Temp"][1])},
@@ -638,6 +650,7 @@ elif st.session_state.slide == 3:
                     st.session_state.briefing_meta = {
                         "craft": st.session_state.craft,
                         "selected_date": selected_date.strftime("%Y-%m-%d"),
+                        "selected_weekday": selected_date.strftime("%A"),
                         "start_time": start_time.strftime("%H:%M"),
                         "end_time": end_time.strftime("%H:%M"),
                     }
@@ -655,7 +668,7 @@ elif st.session_state.slide == 4:
 
     st.title(f"Briefing: {meta.get('craft', 'Craft').split(' - ')[0].title()}")
     st.write(
-        f"**Date:** {meta.get('selected_date', '')}  \n"
+        f"**Date:** {meta.get('selected_weekday', '')}, {meta.get('selected_date', '')}  \n"
         f"**Window:** {meta.get('start_time', '')} to {meta.get('end_time', '')} EDT  \n"
         f"**Overall:** {status_dot(st.session_state.overall_status or 'GO')}"
     )
@@ -668,12 +681,18 @@ elif st.session_state.slide == 4:
     notes = []
     row_lookup = {row["Metric"]: row for row in (st.session_state.forecast_rows or [])}
 
-    thunder_status = row_lookup.get("Thunder", {}).get("Status", "")
+    confidence_value = row_lookup.get("Confidence", {}).get("Value", "")
     wind_status = row_lookup.get("Wind", {}).get("Status", "")
     gust_status = row_lookup.get("Gusts", {}).get("Status", "")
+    thunder_status = row_lookup.get("Thunder", {}).get("Status", "")
     flow_status = row_lookup.get("Flow", {}).get("Status", "")
     flow_value = row_lookup.get("Flow", {}).get("Value", "")
     rain_status = row_lookup.get("Rain", {}).get("Status", "")
+
+    if confidence_value == "MEDIUM":
+        notes.append("Forecast confidence: Medium. Good for planning, but re-check closer to departure.")
+    elif confidence_value == "LOW":
+        notes.append("Forecast confidence: Low. Treat this as an early planning signal and verify again closer to sail time.")
 
     if "NO-GO" in thunder_status:
         notes.append("General Safety: Thunder appears in the selected forecast window.")
