@@ -333,39 +333,45 @@ def fetch_usgs_current_stage():
 # -----------------------------
 # SUMMARIES
 # -----------------------------
-def summarize_tides(tides_df, start_dt):
+def summarize_tides(tides_df, start_dt, end_dt):
     if tides_df.empty:
         return "No tide data", "CAUTION", None
 
-    highs = tides_df[tides_df["type"] == "H"]
-    lows = tides_df[tides_df["type"] == "L"]
+    tides_df = tides_df.sort_values("dt")
 
-    next_high = highs[highs["dt"] >= start_dt].head(1)
-    next_low = lows[lows["dt"] >= start_dt].head(1)
+    before_start = tides_df[tides_df["dt"] <= start_dt].tail(1)
+    after_start = tides_df[tides_df["dt"] > start_dt].head(1)
+    after_end = tides_df[tides_df["dt"] > end_dt].head(1)
 
-    if next_high.empty and not highs.empty:
-        next_high = highs.tail(1)
-    if next_low.empty and not lows.empty:
-        next_low = lows.tail(1)
-
-    next_high_dt = next_high.iloc[0]["dt"] if not next_high.empty else None
-    next_low_dt = next_low.iloc[0]["dt"] if not next_low.empty else None
-
-    tide_phase = None
-    if next_low_dt is not None and next_high_dt is not None:
-        tide_phase = "ebb" if next_low_dt <= next_high_dt else "flood"
-    elif next_low_dt is not None:
-        tide_phase = "ebb"
-    elif next_high_dt is not None:
-        tide_phase = "flood"
+    def fmt_row(r):
+        label = "High" if r["type"] == "H" else "Low"
+        return f"{label} @ {fmt_ampm(r['dt'])} ({r['height_ft']:.1f} ft)"
 
     parts = []
-    if not next_high.empty:
-        r = next_high.iloc[0]
-        parts.append(f"High: ~{fmt_ampm(r['dt'])} ({r['height_ft']:+.1f} ft)")
-    if not next_low.empty:
-        r = next_low.iloc[0]
-        parts.append(f"Low: ~{fmt_ampm(r['dt'])} ({r['height_ft']:+.1f} ft)")
+
+    if not before_start.empty:
+        parts.append(f"Departing: {fmt_row(before_start.iloc[0])}")
+
+    if not after_start.empty:
+        parts.append(f"Next: {fmt_row(after_start.iloc[0])}")
+
+    if not after_end.empty:
+        next_after_start_dt = after_start.iloc[0]["dt"] if not after_start.empty else None
+        next_after_end_dt = after_end.iloc[0]["dt"]
+
+        # Avoid repeating the same tide as both Next and Return
+        if next_after_start_dt is None or next_after_end_dt != next_after_start_dt:
+            parts.append(f"Return: {fmt_row(after_end.iloc[0])}")
+
+    tide_phase = None
+    if not before_start.empty and not after_start.empty:
+        prev_type = before_start.iloc[0]["type"]
+        next_type = after_start.iloc[0]["type"]
+
+        if prev_type == "H" and next_type == "L":
+            tide_phase = "ebb"
+        elif prev_type == "L" and next_type == "H":
+            tide_phase = "flood"
 
     return "; ".join(parts), "GO", tide_phase
 
@@ -602,7 +608,7 @@ elif st.session_state.slide == 3:
                         current_stage = fetch_usgs_current_stage()
 
                     weather = summarize_weather_window(window_df, st.session_state.craft)
-                    tide_text, tide_status, tide_phase = summarize_tides(tides_df, start_dt)
+                    tide_text, tide_status, tide_phase = summarize_tides(tides_df, start_dt, end_dt)
                     stage_text, stage_status = summarize_stage(current_stage, tide_phase)
 
                     rows = [
