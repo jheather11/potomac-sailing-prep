@@ -1,4 +1,4 @@
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 from io import StringIO
 from zoneinfo import ZoneInfo
 import re
@@ -22,6 +22,7 @@ NOAA_TIDE_STATION = "8594900"  # Washington, DC
 
 USGS_IV_URL = "https://waterservices.usgs.gov/nwis/iv/"
 USGS_STATS_URL = "https://waterservices.usgs.gov/nwis/stat/"
+USGS_DV_URL = "https://waterservices.usgs.gov/nwis/dv/"
 USGS_SITE = "01646500"  # Little Falls
 
 NDFD_XML_URL = "https://digital.weather.gov/xml/sample_products/browser_interface/ndfdXMLclient.php"
@@ -156,6 +157,62 @@ def parse_numeric(value):
         return None
     m = re.search(r"-?\d+(\.\d+)?", str(value))
     return float(m.group(0)) if m else None
+
+
+def parse_usgs_rdb(text: str) -> pd.DataFrame:
+    """
+    Parse USGS RDB text safely.
+    USGS RDB commonly has:
+      - comment lines beginning with '#'
+      - one header row
+      - one type-spec row immediately after header
+      - data rows thereafter
+    """
+    lines = []
+    for ln in text.splitlines():
+        if not ln.strip():
+            continue
+        if ln.startswith("#"):
+            continue
+        lines.append(ln)
+
+    if len(lines) < 3:
+        return pd.DataFrame()
+
+    header = lines[0].split("\t")
+    data_lines = lines[2:]  # skip the type-spec row
+
+    rows = []
+    for ln in data_lines:
+        parts = ln.split("\t")
+        if len(parts) < len(header):
+            parts.extend([""] * (len(header) - len(parts)))
+        elif len(parts) > len(header):
+            parts = parts[:len(header)]
+        rows.append(parts)
+
+    if not rows:
+        return pd.DataFrame(columns=header)
+
+    return pd.DataFrame(rows, columns=header)
+
+
+def first_matching_column(columns, preferred_names=None, regexes=None):
+    preferred_names = preferred_names or []
+    regexes = regexes or []
+
+    cols = list(columns)
+
+    for name in preferred_names:
+        if name in cols:
+            return name
+
+    for rgx in regexes:
+        for col in cols:
+            if re.fullmatch(rgx, col):
+                return col
+
+    return None
 
 
 # -----------------------------
@@ -329,42 +386,153 @@ def fetch_usgs_current_stage():
     return float(latest["value"])
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_usgs_stage_daily_average(selected_date):
-    params = {
-        "format": "rdb",
-        "site": USGS_SITE,
-        "parameterCd": "00065",
-        "statReportType": "daily",
-        "statType": "mean",
-    }
-
-    text = safe_get(USGS_STATS_URL, params=params).text
-    lines = [ln for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
-    if len(lines) < 2:
-        return None
-
-    df = pd.read_csv(StringIO("\n".join(lines)), sep="\t", dtype=str)
-
-    # The second row in USGS RDB is often a type-spec row; coerce numerics and drop bad rows.
-    for col in ["month_nu", "day_nu", "mean_va"]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    if not {"month_nu", "day_nu", "mean_va"}.issubset(df.columns):
-        return None
-
-    df = df.dropna(subset=["month_nu", "day_nu", "mean_va"]).copy()
-
-    match = df[
-        (df["month_nu"] == selected_date.month) &
-        (df["day_nu"] == selected_date.day)
+def _fetch_usgs_stage_daily_average_from_stats(selected_date):
+    """
+    Preferred source:
+    USGS stats service daily mean for month/day climatology.
+    Robust to slight differences in accepted argument names and output columns.
+    """
+    candidate_param_sets = [
+        {
+            "format": "rdb",
+            "sites": USGS_SITE,
+            "parameterCd": "00065",
+            "statReportType": "daily",
+            "statType": "mean",
+        },
+        {
+            "format": "rdb",
+            "site": USGS_SITE,
+            "parameterCd": "00065",
+            "statReportType": "daily",
+            "statType": "mean",
+        },
+        {
+            "format": "rdb",
+            "sites": USGS_SITE,
+            "parameterCd": "00065",
+            "statReportType": "daily",
+            "statTypeCd": "mean",
+        },
+        {
+            "format": "rdb",
+            "site": USGS_SITE,
+            "parameterCd": "00065",
+            "statReportType": "daily",
+            "statTypeCd": "mean",
+        },
     ]
 
-    if match.empty:
+    for params in candidate_param_sets:
+        try:
+            text = safe_get(USGS_STATS_URL, params=params, timeout=25).text
+            df = parse_usgs_rdb(text)
+            if df.empty:
+                continue
+
+            month_col = first_matching_column(
+                df.columns,
+                preferred_names=["month_nu"],
+                regexes=[r".*month.*"]
+            )
+            day_col = first_matching_column(
+                df.columns,
+                preferred_names=["day_nu"],
+                regexes=[r".*day.*"]
+            )
+            mean_col = first_matching_column(
+                df.columns,
+                preferred_names=["mean_va"],
+                regexes=[r"mean.*_va", r".*mean.*"]
+            )
+
+            if not month_col or not day_col or not mean_col:
+                continue
+
+            tmp = df.copy()
+            tmp[month_col] = pd.to_numeric(tmp[month_col], errors="coerce")
+            tmp[day_col] = pd.to_numeric(tmp[day_col], errors="coerce")
+            tmp[mean_col] = pd.to_numeric(tmp[mean_col], errors="coerce")
+            tmp = tmp.dropna(subset=[month_col, day_col, mean_col])
+
+            match = tmp[
+                (tmp[month_col] == selected_date.month) &
+                (tmp[day_col] == selected_date.day)
+            ]
+
+            if match.empty:
+                continue
+
+            val = float(match.iloc[0][mean_col])
+            if pd.notna(val):
+                return val
+        except Exception:
+            continue
+
+    return None
+
+
+def _fetch_usgs_stage_daily_average_from_dv(selected_date):
+    """
+    Fallback source:
+    If stats service does not yield a climatology value, use the daily values service
+    for the exact selected date when available. This is most useful for past dates.
+    """
+    try:
+        params = {
+            "format": "json",
+            "sites": USGS_SITE,
+            "parameterCd": "00065",
+            "startDT": selected_date.strftime("%Y-%m-%d"),
+            "endDT": selected_date.strftime("%Y-%m-%d"),
+            "siteStatus": "all",
+        }
+        data = safe_get(USGS_DV_URL, params=params, timeout=25).json()
+        series = data.get("value", {}).get("timeSeries", [])
+        if not series:
+            return None
+
+        for ts in series:
+            variable_code = (
+                ts.get("variable", {})
+                .get("variableCode", [{}])[0]
+                .get("value")
+            )
+            if variable_code != "00065":
+                continue
+
+            values_blocks = ts.get("values", [])
+            for block in values_blocks:
+                for row in block.get("value", []):
+                    val = parse_numeric(row.get("value"))
+                    if val is not None:
+                        return float(val)
+    except Exception:
         return None
 
-    return float(match.iloc[0]["mean_va"])
+    return None
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_usgs_stage_daily_average(selected_date):
+    """
+    Return a daily average gage-height value for the selected date.
+
+    Preferred behavior:
+    - Use USGS stats service daily mean (month/day climatology) for reliability across dates,
+      including future dates in the same month/day test case pattern.
+    Fallback:
+    - If stats service is blank/unavailable, use daily values for the exact date when possible.
+    """
+    avg_stage = _fetch_usgs_stage_daily_average_from_stats(selected_date)
+    if avg_stage is not None:
+        return avg_stage
+
+    avg_stage = _fetch_usgs_stage_daily_average_from_dv(selected_date)
+    if avg_stage is not None:
+        return avg_stage
+
+    return None
 
 
 # -----------------------------
@@ -599,7 +767,6 @@ elif st.session_state.slide == 3:
 
                         if not gust_df.empty:
                             weather_df = weather_df.merge(gust_df, on="dt", how="left", suffixes=("", "_ndfd"))
-                            # If a merged gust column from NDFD exists, prefer it
                             if "gust_mph_ndfd" in weather_df.columns:
                                 weather_df["gust_mph"] = weather_df["gust_mph_ndfd"]
                                 weather_df = weather_df.drop(columns=["gust_mph_ndfd"])
