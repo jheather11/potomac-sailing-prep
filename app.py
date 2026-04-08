@@ -1,6 +1,8 @@
 from datetime import datetime, date, time
-import re
+from io import StringIO
 from zoneinfo import ZoneInfo
+import re
+import xml.etree.ElementTree as ET
 
 import pandas as pd
 import requests
@@ -19,7 +21,10 @@ NOAA_TIDES_URL = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter"
 NOAA_TIDE_STATION = "8594900"  # Washington, DC
 
 USGS_IV_URL = "https://waterservices.usgs.gov/nwis/iv/"
+USGS_STATS_URL = "https://waterservices.usgs.gov/nwis/stat/"
 USGS_SITE = "01646500"  # Little Falls
+
+NDFD_XML_URL = "https://digital.weather.gov/xml/sample_products/browser_interface/ndfdXMLclient.php"
 
 HEADERS = {
     "User-Agent": "PotomacDCAForecast/1.0"
@@ -56,9 +61,8 @@ def safe_get(url, params=None, timeout=25):
     return r
 
 
-def parse_iso_to_eastern_naive(dt_str):
-    # Convert NWS timestamp to America/New_York, then strip tz info for local comparisons
-    dt = datetime.fromisoformat(dt_str)
+def parse_iso_to_eastern_naive(dt_str: str) -> datetime:
+    dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
     dt_eastern = dt.astimezone(EASTERN_TZ)
     return dt_eastern.replace(tzinfo=None)
 
@@ -113,11 +117,6 @@ def unique_join(values):
 
 
 def extract_wind_range(wind_speed_raw):
-    """
-    NWS examples:
-    - '17 mph'
-    - '10 to 15 mph'
-    """
     txt = str(wind_speed_raw or "").strip()
     nums = [int(x) for x in re.findall(r"\d+", txt)]
     if len(nums) >= 2:
@@ -146,8 +145,21 @@ def infer_thunder_flag(short_forecast, detailed_forecast):
     return any(term in txt for term in terms)
 
 
+def xml_localname(tag):
+    if "}" in tag:
+        return tag.split("}", 1)[1]
+    return tag
+
+
+def parse_numeric(value):
+    if value is None:
+        return None
+    m = re.search(r"-?\d+(\.\d+)?", str(value))
+    return float(m.group(0)) if m else None
+
+
 # -----------------------------
-# DATA FETCHING
+# NWS API WEATHER
 # -----------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_nws_hourly_url(lat, lon):
@@ -173,7 +185,7 @@ def fetch_nws_hourly_dataframe(lat, lon):
                 "wind_low_mph": wind_low,
                 "wind_high_mph": wind_high,
                 "wind_dir": p.get("windDirection"),
-                "gust_mph": None,  # API feed not reliably exposing this for this app
+                "gust_mph": None,
                 "pop_pct": p.get("probabilityOfPrecipitation", {}).get("value"),
                 "rain_code": infer_rain_bucket(
                     p.get("shortForecast", ""),
@@ -191,6 +203,78 @@ def fetch_nws_hourly_dataframe(lat, lon):
     return pd.DataFrame(rows).sort_values("dt").reset_index(drop=True)
 
 
+# -----------------------------
+# NDFD XML GUSTS
+# -----------------------------
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_ndfd_gust_dataframe(lat, lon, start_dt, end_dt):
+    params = {
+        "lat": lat,
+        "lon": lon,
+        "product": "time-series",
+        "begin": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+        "end": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+        "Unit": "e",
+        "wgust": "wgust",
+    }
+
+    xml_text = safe_get(NDFD_XML_URL, params=params).text
+    root = ET.fromstring(xml_text)
+
+    time_layouts = {}
+    for elem in root.iter():
+        if xml_localname(elem.tag) == "time-layout":
+            layout_key = None
+            starts = []
+            for child in elem:
+                lname = xml_localname(child.tag)
+                if lname == "layout-key":
+                    layout_key = (child.text or "").strip()
+                elif lname == "start-valid-time" and child.text:
+                    starts.append(parse_iso_to_eastern_naive(child.text.strip()))
+            if layout_key:
+                time_layouts[layout_key] = starts
+
+    gust_rows = []
+
+    for elem in root.iter():
+        lname = xml_localname(elem.tag)
+        if lname != "wind-speed":
+            continue
+
+        elem_type = (elem.attrib.get("type") or "").strip().lower()
+        name_text = ""
+        layout_key = None
+        values = []
+
+        for child in elem:
+            child_name = xml_localname(child.tag)
+            if child_name == "name":
+                name_text = (child.text or "").strip().lower()
+            elif child_name == "time-layout":
+                layout_key = (child.text or "").strip()
+            elif child_name == "value":
+                values.append(parse_numeric(child.text))
+
+        is_gust = (elem_type == "gust") or ("gust" in name_text)
+        if not is_gust or not layout_key or layout_key not in time_layouts:
+            continue
+
+        times = time_layouts[layout_key]
+        for dt_obj, gust_val in zip(times, values):
+            gust_rows.append({"dt": dt_obj, "gust_mph": gust_val})
+
+    if not gust_rows:
+        return pd.DataFrame(columns=["dt", "gust_mph"])
+
+    df = pd.DataFrame(gust_rows)
+    df = df.drop_duplicates(subset=["dt"]).sort_values("dt").reset_index(drop=True)
+    return df
+
+
+# -----------------------------
+# NOAA TIDES
+# -----------------------------
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_tides_for_day(selected_date):
     params = {
@@ -221,12 +305,15 @@ def fetch_tides_for_day(selected_date):
     return pd.DataFrame(rows)
 
 
+# -----------------------------
+# USGS STAGE + DAILY AVG
+# -----------------------------
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_usgs_current_flow():
+def fetch_usgs_current_stage():
     params = {
         "format": "json",
         "sites": USGS_SITE,
-        "parameterCd": "00060",
+        "parameterCd": "00065",  # gage height, feet
         "siteStatus": "all",
     }
     data = safe_get(USGS_IV_URL, params=params).json()
@@ -240,6 +327,44 @@ def fetch_usgs_current_flow():
 
     latest = values[0]["value"][-1]
     return float(latest["value"])
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_usgs_stage_daily_average(selected_date):
+    params = {
+        "format": "rdb",
+        "site": USGS_SITE,
+        "parameterCd": "00065",
+        "statReportType": "daily",
+        "statType": "mean",
+    }
+
+    text = safe_get(USGS_STATS_URL, params=params).text
+    lines = [ln for ln in text.splitlines() if ln.strip() and not ln.startswith("#")]
+    if len(lines) < 2:
+        return None
+
+    df = pd.read_csv(StringIO("\n".join(lines)), sep="\t", dtype=str)
+
+    # The second row in USGS RDB is often a type-spec row; coerce numerics and drop bad rows.
+    for col in ["month_nu", "day_nu", "mean_va"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if not {"month_nu", "day_nu", "mean_va"}.issubset(df.columns):
+        return None
+
+    df = df.dropna(subset=["month_nu", "day_nu", "mean_va"]).copy()
+
+    match = df[
+        (df["month_nu"] == selected_date.month) &
+        (df["day_nu"] == selected_date.day)
+    ]
+
+    if match.empty:
+        return None
+
+    return float(match.iloc[0]["mean_va"])
 
 
 # -----------------------------
@@ -271,18 +396,20 @@ def summarize_tides(tides_df, start_dt):
     return "; ".join(parts), "GO"
 
 
-def summarize_flow(current_cfs):
-    if current_cfs is None:
-        return "No flow data", "CAUTION"
+def summarize_stage(current_stage, avg_stage):
+    if current_stage is None:
+        return "Potomac (Little Falls): No data", "CAUTION"
 
-    if current_cfs >= 25000:
+    if current_stage >= 6.0:
         status = "NO-GO"
-    elif current_cfs >= 12000:
+    elif current_stage >= 4.5:
         status = "CAUTION"
     else:
         status = "GO"
 
-    return f"Potomac (Little Falls): {current_cfs:,.0f} cfs", status
+    avg_txt = f"{avg_stage:.1f}" if avg_stage is not None else "--"
+    text = f"Potomac (Little Falls): {current_stage:.1f}ft (avg={avg_txt})"
+    return text, status
 
 
 def summarize_weather_window(window_df, craft):
@@ -306,9 +433,28 @@ def summarize_weather_window(window_df, craft):
     wind_text = f"{range_text(wind_min, wind_max, ' mph')}, {wind_dir_text}"
     wind_status = "CAUTION" if (wind_max is not None and wind_max >= 18) else "GO"
 
-    # GUSTS
-    gust_text = "None Reported"
-    gust_status = "GO"
+    # GUSTS from NDFD wgust
+    gust_vals = window_df["gust_mph"].dropna()
+    gust_max = int(gust_vals.max()) if not gust_vals.empty else None
+
+    if gust_max is None:
+        gust_text = "None Reported"
+        gust_status = "GO"
+    else:
+        gust_text = f"{gust_max} mph"
+        if craft == "CRUISER - POTOMAC":
+            yellow_gust = 20
+            red_gust = 29
+        else:  # FLYING SCOT
+            yellow_gust = 15
+            red_gust = 19
+
+        if gust_max >= red_gust:
+            gust_status = "NO-GO"
+        elif gust_max >= yellow_gust:
+            gust_status = "CAUTION"
+        else:
+            gust_status = "GO"
 
     # RAIN
     pop_series = window_df["pop_pct"].dropna()
@@ -449,6 +595,15 @@ elif st.session_state.slide == 3:
 
                     with st.spinner("Retrieving forecast data..."):
                         weather_df = fetch_nws_hourly_dataframe(LAT, LON)
+                        gust_df = fetch_ndfd_gust_dataframe(LAT, LON, start_dt, end_dt)
+
+                        if not gust_df.empty:
+                            weather_df = weather_df.merge(gust_df, on="dt", how="left", suffixes=("", "_ndfd"))
+                            # If a merged gust column from NDFD exists, prefer it
+                            if "gust_mph_ndfd" in weather_df.columns:
+                                weather_df["gust_mph"] = weather_df["gust_mph_ndfd"]
+                                weather_df = weather_df.drop(columns=["gust_mph_ndfd"])
+
                         window_df = weather_df[
                             (weather_df["dt"] >= start_dt) &
                             (weather_df["dt"] <= end_dt)
@@ -456,22 +611,22 @@ elif st.session_state.slide == 3:
 
                         if window_df.empty:
                             raise ValueError(
-                                "No hourly forecast rows found for that date/time window. "
-                                "Try a nearer date/time."
+                                "No hourly forecast rows found for that date/time window. Try a nearer date/time."
                             )
 
                         tides_df = fetch_tides_for_day(selected_date)
-                        current_flow = fetch_usgs_current_flow()
+                        current_stage = fetch_usgs_current_stage()
+                        avg_stage = fetch_usgs_stage_daily_average(selected_date)
 
                     weather = summarize_weather_window(window_df, st.session_state.craft)
                     tide_text, tide_status = summarize_tides(tides_df, start_dt)
-                    flow_text, flow_status = summarize_flow(current_flow)
+                    stage_text, stage_status = summarize_stage(current_stage, avg_stage)
 
                     rows = [
                         {"Metric": "Wind", "Value": weather["Wind"][0], "Status": status_dot(weather["Wind"][1])},
                         {"Metric": "Gusts", "Value": weather["Gusts"][0], "Status": status_dot(weather["Gusts"][1])},
                         {"Metric": "Temp", "Value": weather["Temp"][0], "Status": status_dot(weather["Temp"][1])},
-                        {"Metric": "Flow", "Value": flow_text, "Status": status_dot(flow_status)},
+                        {"Metric": "Flow", "Value": stage_text, "Status": status_dot(stage_status)},
                         {"Metric": "Tides", "Value": tide_text, "Status": status_dot(tide_status)},
                         {"Metric": "Rain", "Value": weather["Rain"][0], "Status": status_dot(weather["Rain"][1])},
                         {"Metric": "Thunder", "Value": weather["Thunder"][0], "Status": status_dot(weather["Thunder"][1])},
@@ -481,7 +636,7 @@ elif st.session_state.slide == 3:
                         weather["Wind"][1],
                         weather["Gusts"][1],
                         weather["Temp"][1],
-                        flow_status,
+                        stage_status,
                         tide_status,
                         weather["Rain"][1],
                         weather["Thunder"][1],
@@ -526,22 +681,28 @@ elif st.session_state.slide == 4:
 
     thunder_status = row_lookup.get("Thunder", {}).get("Status", "")
     wind_status = row_lookup.get("Wind", {}).get("Status", "")
+    gust_status = row_lookup.get("Gusts", {}).get("Status", "")
     flow_status = row_lookup.get("Flow", {}).get("Status", "")
     rain_status = row_lookup.get("Rain", {}).get("Status", "")
+
+    if "NO-GO" in thunder_status:
+        notes.append("General Safety: Thunder appears in the selected forecast window.")
+
+    if "NO-GO" in gust_status:
+        notes.append("Gusts: Peak gusts are in the no-go range for this craft.")
+    elif "CAUTION" in gust_status:
+        notes.append("Gusts: Peak gusts are in the caution range for this craft.")
 
     if "CAUTION" in wind_status:
         notes.append("Wind: Sustained winds may still create chop, especially on wider river sections.")
 
     if "NO-GO" in flow_status:
-        notes.append("Flow: River flow is very high.")
+        notes.append("River level: Little Falls stage is very high.")
     elif "CAUTION" in flow_status:
-        notes.append("Flow: Elevated river flow may increase current strength and debris risk.")
+        notes.append("River level: Little Falls stage is elevated above typical easy conditions.")
 
     if "CAUTION" in rain_status:
         notes.append("Rain: Showers or elevated precipitation chances may reduce comfort and visibility.")
-
-    if "NO-GO" in thunder_status:
-        notes.append("General Safety: Thunder appears in the selected forecast window.")
 
     if not notes:
         notes.append("Conditions look generally favorable across the selected metrics.")
