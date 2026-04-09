@@ -1,6 +1,7 @@
 from datetime import datetime, date, time
 from zoneinfo import ZoneInfo
 import re
+import html
 import xml.etree.ElementTree as ET
 
 import pandas as pd
@@ -29,6 +30,7 @@ HEADERS = {
 }
 
 TYPICAL_STAGE_FT = 3.5
+SHARE_URL = "https://potomac-dca-sailing-prep.streamlit.app/"
 
 # -----------------------------
 # SESSION STATE
@@ -165,6 +167,118 @@ def summarize_forecast_confidence(selected_date):
         return "MEDIUM (check all forecasts day of sail)", "CAUTION"
     else:
         return "LOW (do not rely — recheck closer to sail time)", "CAUTION"
+
+
+def days_out_from_today(selected_date):
+    today_local = datetime.now(EASTERN_TZ).date()
+    return (selected_date - today_local).days
+
+
+def render_briefing_table(rows):
+    def esc(text):
+        return html.escape(str(text))
+
+    table_rows = []
+    for row in rows:
+        table_rows.append(
+            f"""
+            <tr>
+                <td class="psp-metric">{esc(row["Metric"])}</td>
+                <td class="psp-value">{esc(row["Value"])}</td>
+                <td class="psp-status">{esc(row["Status"])}</td>
+            </tr>
+            """
+        )
+
+    html_block = f"""
+    <style>
+    .psp-table-wrap {{
+        width: 100%;
+        overflow-x: hidden;
+        margin-top: 0.5rem;
+        margin-bottom: 1rem;
+    }}
+    .psp-table {{
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        table-layout: fixed;
+        border: 1px solid rgba(128,128,128,0.28);
+        border-radius: 16px;
+        overflow: hidden;
+        font-size: 0.98rem;
+    }}
+    .psp-table th,
+    .psp-table td {{
+        padding: 12px 10px;
+        border-bottom: 1px solid rgba(128,128,128,0.20);
+        border-right: 1px solid rgba(128,128,128,0.18);
+        vertical-align: top;
+        text-align: left;
+        word-break: break-word;
+        overflow-wrap: anywhere;
+        line-height: 1.3;
+    }}
+    .psp-table th:last-child,
+    .psp-table td:last-child {{
+        border-right: none;
+    }}
+    .psp-table tr:last-child td {{
+        border-bottom: none;
+    }}
+    .psp-table thead th {{
+        font-weight: 600;
+        opacity: 0.85;
+    }}
+    .psp-metric {{
+        width: 21%;
+        font-weight: 600;
+    }}
+    .psp-value {{
+        width: 57%;
+    }}
+    .psp-status {{
+        width: 22%;
+        white-space: nowrap;
+        font-weight: 600;
+    }}
+
+    @media (max-width: 640px) {{
+        .psp-table {{
+            font-size: 0.84rem;
+        }}
+        .psp-table th,
+        .psp-table td {{
+            padding: 9px 7px;
+        }}
+        .psp-metric {{
+            width: 22%;
+        }}
+        .psp-value {{
+            width: 52%;
+        }}
+        .psp-status {{
+            width: 26%;
+        }}
+    }}
+    </style>
+
+    <div class="psp-table-wrap">
+        <table class="psp-table">
+            <thead>
+                <tr>
+                    <th class="psp-metric">Metric</th>
+                    <th class="psp-value">Value</th>
+                    <th class="psp-status">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {''.join(table_rows)}
+            </tbody>
+        </table>
+    </div>
+    """
+    st.markdown(html_block, unsafe_allow_html=True)
 
 
 # -----------------------------
@@ -355,7 +469,6 @@ def summarize_tides(tides_df, start_dt, end_dt):
     dep_row = nearest_tide(tides_df, start_dt)
     ret_row = nearest_tide(tides_df, end_dt)
 
-    # Determine tide phase at departure using surrounding tides
     before_start = tides_df[tides_df["dt"] <= start_dt].tail(1)
     after_start = tides_df[tides_df["dt"] > start_dt].head(1)
 
@@ -376,7 +489,7 @@ def summarize_tides(tides_df, start_dt, end_dt):
     return tide_text, "GO", tide_phase
 
 
-def summarize_stage(current_stage, tide_phase, typical_stage=TYPICAL_STAGE_FT):
+def summarize_stage(current_stage, tide_phase, selected_date, typical_stage=TYPICAL_STAGE_FT):
     if current_stage is None:
         return "Potomac (Little Falls): No data", "CAUTION"
 
@@ -395,6 +508,9 @@ def summarize_stage(current_stage, tide_phase, typical_stage=TYPICAL_STAGE_FT):
             flags.append("Low water")
     else:
         status = "GO"
+
+    if days_out_from_today(selected_date) >= 2:
+        flags.append("check online")
 
     text = f"Potomac (Little Falls): {current_stage:.1f}ft (typical={typical_stage:.1f})"
     if flags:
@@ -602,7 +718,7 @@ elif st.session_state.slide == 3:
                     confidence_text, confidence_status = summarize_forecast_confidence(selected_date)
                     weather = summarize_weather_window(window_df, st.session_state.craft)
                     tide_text, tide_status, tide_phase = summarize_tides(tides_df, start_dt, end_dt)
-                    stage_text, stage_status = summarize_stage(current_stage, tide_phase)
+                    stage_text, stage_status = summarize_stage(current_stage, tide_phase, selected_date)
 
                     rows = [
                         {"Metric": "Data Confidence", "Value": confidence_text, "Status": status_dot(confidence_status)},
@@ -654,13 +770,13 @@ elif st.session_state.slide == 4:
         f"**Overall:** {status_dot(st.session_state.overall_status or 'GO')}"
     )
 
-    df = pd.DataFrame(st.session_state.forecast_rows or [])
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    rows = st.session_state.forecast_rows or []
+    render_briefing_table(rows)
 
     st.markdown("### Considerations")
 
     notes = []
-    row_lookup = {row["Metric"]: row for row in (st.session_state.forecast_rows or [])}
+    row_lookup = {row["Metric"]: row for row in rows}
 
     confidence_value = row_lookup.get("Data Confidence", {}).get("Value", "")
     thunder_status = row_lookup.get("Thunder", {}).get("Status", "")
@@ -696,6 +812,9 @@ elif st.session_state.slide == 4:
         else:
             notes.append("River level: Little Falls stage is elevated above typical easy conditions.")
 
+    if "check online" in flow_value:
+        notes.append("Flow: This is an observed stage, not a true multi-day flow forecast — check online closer to sail time.")
+
     if "CAUTION" in rain_status:
         notes.append("Rain: Showers or elevated precipitation chances may reduce comfort and visibility.")
 
@@ -707,8 +826,7 @@ elif st.session_state.slide == 4:
 
     st.markdown("---")
     st.markdown("### Share This Tool")
-    st.markdown("[🔗 Open Potomac Sailing Prep](https://potomac-dca-sailing-prep.streamlit.app/)")
-    st.code("https://potomac-dca-sailing-prep.streamlit.app/", language="text")
+    st.code(SHARE_URL, language="text")
 
     col1, col2 = st.columns(2)
     with col1:
