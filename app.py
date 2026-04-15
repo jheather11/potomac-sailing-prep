@@ -1,4 +1,4 @@
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 from zoneinfo import ZoneInfo
 import re
 import html
@@ -345,14 +345,28 @@ def fetch_nws_hourly_dataframe(lat, lon):
 # -----------------------------
 # NDFD XML GUSTS
 # -----------------------------
+def normalize_gust_timestamp(dt_obj: datetime) -> datetime:
+    """
+    Normalize gust timestamps to improve alignment with NWS hourly rows.
+    NDFD times can be offset from exact forecast-hour timestamps.
+    """
+    if dt_obj.minute >= 30:
+        dt_obj = dt_obj + timedelta(hours=1)
+    return dt_obj.replace(minute=0, second=0, microsecond=0)
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_ndfd_gust_dataframe(lat, lon, start_dt, end_dt):
+    # Query a slightly wider window so near-edge gust values are not lost.
+    begin_dt = start_dt - timedelta(hours=2)
+    finish_dt = end_dt + timedelta(hours=2)
+
     params = {
         "lat": lat,
         "lon": lon,
         "product": "time-series",
-        "begin": start_dt.strftime("%Y-%m-%dT%H:%M:%S"),
-        "end": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+        "begin": begin_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+        "end": finish_dt.strftime("%Y-%m-%dT%H:%M:%S"),
         "Unit": "e",
         "wgust": "wgust",
     }
@@ -377,8 +391,7 @@ def fetch_ndfd_gust_dataframe(lat, lon, start_dt, end_dt):
     gust_rows = []
 
     for elem in root.iter():
-        lname = xml_localname(elem.tag)
-        if lname != "wind-speed":
+        if xml_localname(elem.tag) != "wind-speed":
             continue
 
         elem_type = (elem.attrib.get("type") or "").strip().lower()
@@ -396,19 +409,37 @@ def fetch_ndfd_gust_dataframe(lat, lon, start_dt, end_dt):
                 values.append(parse_numeric(child.text))
 
         is_gust = (elem_type == "gust") or ("gust" in name_text)
-        if not is_gust or not layout_key or layout_key not in time_layouts:
+        if not is_gust:
+            continue
+        if not layout_key or layout_key not in time_layouts:
             continue
 
         times = time_layouts[layout_key]
         for dt_obj, gust_val in zip(times, values):
-            gust_rows.append({"dt": dt_obj, "gust_mph": gust_val})
+            if gust_val is None:
+                continue
+            gust_rows.append(
+                {
+                    "dt": dt_obj,
+                    "dt_norm": normalize_gust_timestamp(dt_obj),
+                    "gust_mph": float(gust_val),
+                }
+            )
 
     if not gust_rows:
         return pd.DataFrame(columns=["dt", "gust_mph"])
 
     df = pd.DataFrame(gust_rows)
-    df = df.dropna(subset=["gust_mph"])
-    df = df.drop_duplicates(subset=["dt"]).sort_values("dt").reset_index(drop=True)
+
+    # Keep the strongest gust if multiple NDFD rows normalize into the same hour.
+    df = (
+        df.groupby("dt_norm", as_index=False)["gust_mph"]
+        .max()
+        .rename(columns={"dt_norm": "dt"})
+        .sort_values("dt")
+        .reset_index(drop=True)
+    )
+
     return df
 
 
@@ -609,22 +640,22 @@ def summarize_weather_window(window_df, craft):
 
 def merge_weather_and_gusts(weather_df, gust_df):
     """
-    Use nearest-time matching instead of exact timestamp matching.
-    This is more robust when NDFD gust timestamps differ slightly from
-    NWS hourly timestamps.
+    Use tolerant nearest-time matching instead of exact timestamp matching.
+    This is more robust when NDFD gust timestamps differ from NWS hourly timestamps.
     """
-    if gust_df.empty:
-        return weather_df.copy()
-
     left = weather_df.sort_values("dt").reset_index(drop=True).copy()
+
+    if gust_df.empty:
+        return left
+
     right = gust_df.sort_values("dt").reset_index(drop=True).copy()
 
     merged = pd.merge_asof(
         left,
-        right[["dt", "gust_mph"]].rename(columns={"gust_mph": "gust_mph_ndfd"}),
+        right.rename(columns={"gust_mph": "gust_mph_ndfd"})[["dt", "gust_mph_ndfd"]],
         on="dt",
         direction="nearest",
-        tolerance=pd.Timedelta("35min"),
+        tolerance=pd.Timedelta("90min"),
     )
 
     if "gust_mph_ndfd" in merged.columns:
@@ -828,55 +859,4 @@ elif st.session_state.slide == 4:
     if "MEDIUM" in confidence_value:
         notes.append("Data confidence is moderate — check all forecasts day of sail.")
     elif "LOW" in confidence_value:
-        notes.append("Data confidence is low — do not rely on this forecast alone; recheck closer to sail time.")
-
-    if "NO-GO" in thunder_status:
-        notes.append("General Safety: Thunder appears in the selected forecast window.")
-
-    if "NO-GO" in gust_status:
-        notes.append("Gusts: Peak gusts are in the no-go range for this craft.")
-    elif "CAUTION" in gust_status:
-        notes.append("Gusts: Peak gusts are in the caution range for this craft.")
-
-    if "CAUTION" in wind_status:
-        notes.append("Wind: Sustained winds may still create chop, especially on wider river sections.")
-
-    if "NO-GO" in flow_status:
-        notes.append("River level: Little Falls stage is very high.")
-    elif "CAUTION" in flow_status:
-        if "Low water + ebb" in flow_value:
-            notes.append("River level: Low water combined with ebb tide may increase grounding risk and make handling trickier in shallow areas.")
-        elif "Low water" in flow_value:
-            notes.append("River level: Low water may reduce depth margins in shallow areas.")
-        else:
-            notes.append("River level: Little Falls stage is elevated above typical easy conditions.")
-
-    if "check online" in flow_value:
-        notes.append("Flow: This is an observed stage, not a true multi-day flow forecast — check online closer to sail time.")
-
-    if "CAUTION" in rain_status:
-        notes.append("Rain: Showers or elevated precipitation chances may reduce comfort and visibility.")
-
-    if not notes:
-        notes.append("Conditions look generally favorable across the selected metrics.")
-
-    for note in notes:
-        st.markdown(f"- {note}")
-
-    st.markdown("---")
-    st.markdown("### Share This Tool")
-    st.code(SHARE_URL, language="text")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("BACK"):
-            st.session_state.slide = 3
-            st.rerun()
-    with col2:
-        if st.button("START OVER"):
-            st.session_state.slide = 1
-            st.session_state.craft = None
-            st.session_state.forecast_rows = None
-            st.session_state.overall_status = None
-            st.session_state.briefing_meta = None
-            st.rerun()
+        notes.append("Data confidence is low — do not rely on this forecast alone; re
