@@ -407,6 +407,7 @@ def fetch_ndfd_gust_dataframe(lat, lon, start_dt, end_dt):
         return pd.DataFrame(columns=["dt", "gust_mph"])
 
     df = pd.DataFrame(gust_rows)
+    df = df.dropna(subset=["gust_mph"])
     df = df.drop_duplicates(subset=["dt"]).sort_values("dt").reset_index(drop=True)
     return df
 
@@ -606,6 +607,33 @@ def summarize_weather_window(window_df, craft):
     }
 
 
+def merge_weather_and_gusts(weather_df, gust_df):
+    """
+    Use nearest-time matching instead of exact timestamp matching.
+    This is more robust when NDFD gust timestamps differ slightly from
+    NWS hourly timestamps.
+    """
+    if gust_df.empty:
+        return weather_df.copy()
+
+    left = weather_df.sort_values("dt").reset_index(drop=True).copy()
+    right = gust_df.sort_values("dt").reset_index(drop=True).copy()
+
+    merged = pd.merge_asof(
+        left,
+        right[["dt", "gust_mph"]].rename(columns={"gust_mph": "gust_mph_ndfd"}),
+        on="dt",
+        direction="nearest",
+        tolerance=pd.Timedelta("35min"),
+    )
+
+    if "gust_mph_ndfd" in merged.columns:
+        merged["gust_mph"] = merged["gust_mph_ndfd"].combine_first(merged["gust_mph"])
+        merged = merged.drop(columns=["gust_mph_ndfd"])
+
+    return merged
+
+
 def overall_decision(statuses):
     if "NO-GO" in statuses:
         return "NO-GO"
@@ -711,12 +739,7 @@ elif st.session_state.slide == 3:
                     with st.spinner("Retrieving forecast data..."):
                         weather_df = fetch_nws_hourly_dataframe(LAT, LON)
                         gust_df = fetch_ndfd_gust_dataframe(LAT, LON, start_dt, end_dt)
-
-                        if not gust_df.empty:
-                            weather_df = weather_df.merge(gust_df, on="dt", how="left", suffixes=("", "_ndfd"))
-                            if "gust_mph_ndfd" in weather_df.columns:
-                                weather_df["gust_mph"] = weather_df["gust_mph_ndfd"]
-                                weather_df = weather_df.drop(columns=["gust_mph_ndfd"])
+                        weather_df = merge_weather_and_gusts(weather_df, gust_df)
 
                         window_df = weather_df[
                             (weather_df["dt"] >= start_dt) &
