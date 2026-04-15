@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 st.set_page_config(page_title="Potomac Sail Prep (DCA)", layout="centered")
 
@@ -191,12 +192,22 @@ def render_briefing_table(rows):
         )
 
     html_block = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="utf-8">
     <style>
+    body {{
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }}
     .psp-table-wrap {{
         width: 100%;
         overflow-x: hidden;
-        margin-top: 0.5rem;
-        margin-bottom: 1rem;
+        margin: 0;
+        padding: 0;
     }}
     .psp-table {{
         width: 100%;
@@ -206,18 +217,19 @@ def render_briefing_table(rows):
         border: 1px solid rgba(128,128,128,0.28);
         border-radius: 16px;
         overflow: hidden;
-        font-size: 0.98rem;
+        font-size: 15px;
+        background: transparent;
     }}
     .psp-table th,
     .psp-table td {{
-        padding: 12px 10px;
+        padding: 10px 8px;
         border-bottom: 1px solid rgba(128,128,128,0.20);
         border-right: 1px solid rgba(128,128,128,0.18);
         vertical-align: top;
         text-align: left;
         word-break: break-word;
         overflow-wrap: anywhere;
-        line-height: 1.3;
+        line-height: 1.25;
     }}
     .psp-table th:last-child,
     .psp-table td:last-child {{
@@ -235,50 +247,54 @@ def render_briefing_table(rows):
         font-weight: 600;
     }}
     .psp-value {{
-        width: 57%;
+        width: 55%;
     }}
     .psp-status {{
-        width: 22%;
+        width: 24%;
         white-space: nowrap;
         font-weight: 600;
     }}
 
     @media (max-width: 640px) {{
         .psp-table {{
-            font-size: 0.84rem;
+            font-size: 13px;
         }}
         .psp-table th,
         .psp-table td {{
-            padding: 9px 7px;
+            padding: 8px 6px;
         }}
         .psp-metric {{
-            width: 22%;
+            width: 21%;
         }}
         .psp-value {{
-            width: 52%;
+            width: 51%;
         }}
         .psp-status {{
-            width: 26%;
+            width: 28%;
         }}
     }}
     </style>
-
-    <div class="psp-table-wrap">
-        <table class="psp-table">
-            <thead>
-                <tr>
-                    <th class="psp-metric">Metric</th>
-                    <th class="psp-value">Value</th>
-                    <th class="psp-status">Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                {''.join(table_rows)}
-            </tbody>
-        </table>
-    </div>
+    </head>
+    <body>
+        <div class="psp-table-wrap">
+            <table class="psp-table">
+                <thead>
+                    <tr>
+                        <th class="psp-metric">Metric</th>
+                        <th class="psp-value">Value</th>
+                        <th class="psp-status">Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {''.join(table_rows)}
+                </tbody>
+            </table>
+        </div>
+    </body>
+    </html>
     """
-    st.markdown(html_block, unsafe_allow_html=True)
+    height = 56 + (len(rows) * 48)
+    components.html(html_block, height=height, scrolling=False)
 
 
 # -----------------------------
