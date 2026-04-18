@@ -807,7 +807,7 @@ elif st.session_state.slide == 3:
                     ]
                     overall = overall_decision(statuses)
 
-                    updated_text = datetime.now(EASTERN_TZ).strftime("%-I:%M %p EDT")
+                    updated_text = datetime.now(EASTERN_TZ).strftime("%A, %Y-%m-%d, %-I:%M %p EDT")
                     st.session_state.forecast_rows = rows
                     st.session_state.overall_status = overall
                     st.session_state.briefing_meta = {
