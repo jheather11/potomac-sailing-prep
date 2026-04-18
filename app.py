@@ -552,7 +552,7 @@ def summarize_stage(current_stage, tide_phase, selected_date, typical_stage=TYPI
     if days_out_from_today(selected_date) >= 2:
         flags.append("check online")
 
-    text = f"Potomac (Little Falls): {current_stage:.1f}ft (typical={typical_stage:.1f})"
+    text = f"Potomac (Little Falls): {current_stage:.1f} ft (avg {typical_stage:.1f} ft)"
     if flags:
         text += f" | {' / '.join(flags)}"
 
@@ -807,6 +807,7 @@ elif st.session_state.slide == 3:
                     ]
                     overall = overall_decision(statuses)
 
+                    updated_text = datetime.now(EASTERN_TZ).strftime("%-I:%M %p EDT")
                     st.session_state.forecast_rows = rows
                     st.session_state.overall_status = overall
                     st.session_state.briefing_meta = {
@@ -815,6 +816,7 @@ elif st.session_state.slide == 3:
                         "selected_weekday": selected_date.strftime("%A"),
                         "start_time": start_time.strftime("%H:%M"),
                         "end_time": end_time.strftime("%H:%M"),
+                        "updated_at": updated_text,
                     }
                     st.session_state.slide = 4
                     st.rerun()
@@ -832,6 +834,7 @@ elif st.session_state.slide == 4:
     st.write(
         f"**Date:** {meta.get('selected_weekday', '')}, {meta.get('selected_date', '')}  \n"
         f"**Window:** {meta.get('start_time', '')} to {meta.get('end_time', '')} EDT  \n"
+        f"**Updated:** {meta.get('updated_at', '')}  \n"
         f"**Overall:** {status_dot(st.session_state.overall_status or 'GO')}"
     )
 
