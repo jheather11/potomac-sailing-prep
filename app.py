@@ -347,6 +347,11 @@ def fetch_nws_hourly_dataframe(lat, lon):
 # -----------------------------
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_ndfd_gust_dataframe(lat, lon, start_dt, end_dt):
+    """
+    Fetch gusts directly from NDFD XML.
+    We pad the requested window because the XML time layout can start/end
+    slightly outside the exact sail window.
+    """
     params = {
         "lat": lat,
         "lon": lon,
@@ -394,8 +399,7 @@ def fetch_ndfd_gust_dataframe(lat, lon, start_dt, end_dt):
             elif child_name == "value":
                 values.append(parse_numeric(child.text))
 
-        # When only wgust is requested, some XML responses may still vary a bit in labels.
-        is_gust = (elem_type == "gust") or ("gust" in name_text) or (elem_type == "" and layout_key in time_layouts)
+        is_gust = (elem_type == "gust") or ("gust" in name_text)
 
         if not is_gust or not layout_key or layout_key not in time_layouts:
             continue
@@ -409,11 +413,17 @@ def fetch_ndfd_gust_dataframe(lat, lon, start_dt, end_dt):
         return pd.DataFrame(columns=["dt", "gust_mph"])
 
     df = pd.DataFrame(gust_rows)
-    df = df.dropna(subset=["gust_mph"])
-    df = df.sort_values("dt").reset_index(drop=True)
+    df = df.dropna(subset=["gust_mph"]).copy()
+    if df.empty:
+        return pd.DataFrame(columns=["dt", "gust_mph"])
 
-    # Deduplicate by timestamp, keeping the highest gust if duplicates exist
-    df = df.groupby("dt", as_index=False)["gust_mph"].max()
+    # If duplicate timestamps appear, keep the highest gust.
+    df = (
+        df.groupby("dt", as_index=False)["gust_mph"]
+        .max()
+        .sort_values("dt")
+        .reset_index(drop=True)
+    )
     return df
 
 
@@ -542,25 +552,38 @@ def summarize_stage(current_stage, tide_phase, selected_date, typical_stage=TYPI
 
 
 def summarize_gusts_for_window(gust_df, start_dt, end_dt, craft):
-    if gust_df is None or gust_df.empty:
-        gust_max = None
-    else:
-        gust_window = gust_df[(gust_df["dt"] >= start_dt) & (gust_df["dt"] <= end_dt)].copy()
+    """
+    Gusts are computed directly from the NDFD gust dataframe.
+    This avoids false 'None Reported' results caused by timestamp merges.
+    """
+    gust_max = None
 
-        # Fallback: if no rows land exactly in the selected window, use nearest nearby gust rows
+    if gust_df is not None and not gust_df.empty:
+        gust_window = gust_df[
+            (gust_df["dt"] >= start_dt) &
+            (gust_df["dt"] <= end_dt)
+        ].copy()
+
+        # Fallback: allow a modest padded window if exact boundaries return nothing.
         if gust_window.empty:
             padded_start = start_dt - pd.Timedelta(minutes=90)
             padded_end = end_dt + pd.Timedelta(minutes=90)
-            gust_window = gust_df[(gust_df["dt"] >= padded_start) & (gust_df["dt"] <= padded_end)].copy()
+            gust_window = gust_df[
+                (gust_df["dt"] >= padded_start) &
+                (gust_df["dt"] <= padded_end)
+            ].copy()
 
-        gust_vals = pd.to_numeric(gust_window["gust_mph"], errors="coerce").dropna() if not gust_window.empty else pd.Series(dtype=float)
-        gust_max = int(gust_vals.max()) if not gust_vals.empty else None
+        if not gust_window.empty:
+            gust_vals = pd.to_numeric(gust_window["gust_mph"], errors="coerce").dropna()
+            if not gust_vals.empty:
+                gust_max = int(gust_vals.max())
 
     if gust_max is None:
         gust_text = "None Reported"
         gust_status = "GO"
     else:
         gust_text = f"{gust_max} mph"
+
         if craft == "CRUISER - POTOMAC":
             yellow_gust = 20
             red_gust = 29
@@ -631,8 +654,8 @@ def summarize_weather_window(window_df, craft, gust_df, start_dt, end_dt):
 
 def merge_weather_and_gusts(weather_df, gust_df):
     """
-    Keep a nearest-time merge for any future use, but final gust decision
-    no longer depends on this merge.
+    Keep a nearest-time merge for optional future use, but the dashboard's
+    final Gusts row no longer depends on this merge.
     """
     if gust_df.empty:
         return weather_df.copy()
