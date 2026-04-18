@@ -1,4 +1,4 @@
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 from zoneinfo import ZoneInfo
 import re
 import html
@@ -121,14 +121,6 @@ def extract_wind_range(wind_speed_raw):
     if len(nums) == 1:
         return nums[0], nums[0]
     return None, None
-
-
-def extract_single_speed(speed_raw):
-    txt = str(speed_raw or "").strip()
-    nums = [int(x) for x in re.findall(r"\d+", txt)]
-    if not nums:
-        return None
-    return max(nums)
 
 
 def infer_rain_bucket(short_forecast, detailed_forecast):
@@ -289,13 +281,60 @@ def render_briefing_table(rows):
     components.html(html_block, height=height, scrolling=False)
 
 
+def parse_iso8601_duration_to_hours(duration_text: str) -> float:
+    """
+    Minimal ISO8601 duration parser for strings like:
+    PT1H, PT2H, PT30M, PT1H30M, P1DT6H
+    """
+    if not duration_text:
+        return 1.0
+
+    pattern = re.compile(
+        r"^P"
+        r"(?:(?P<days>\d+)D)?"
+        r"(?:T"
+        r"(?:(?P<hours>\d+)H)?"
+        r"(?:(?P<minutes>\d+)M)?"
+        r"(?:(?P<seconds>\d+)S)?"
+        r")?$"
+    )
+    m = pattern.match(duration_text.strip())
+    if not m:
+        return 1.0
+
+    days = int(m.group("days") or 0)
+    hours = int(m.group("hours") or 0)
+    minutes = int(m.group("minutes") or 0)
+    seconds = int(m.group("seconds") or 0)
+
+    total_hours = days * 24 + hours + minutes / 60 + seconds / 3600
+    return total_hours if total_hours > 0 else 1.0
+
+
+def kmh_to_mph(value):
+    if value is None:
+        return None
+    return float(value) * 0.621371
+
+
 # -----------------------------
 # NWS API WEATHER
 # -----------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
+def get_nws_point_data(lat, lon):
+    return safe_get(f"https://api.weather.gov/points/{lat},{lon}").json()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_nws_hourly_url(lat, lon):
-    data = safe_get(f"https://api.weather.gov/points/{lat},{lon}").json()
+    data = get_nws_point_data(lat, lon)
     return data["properties"]["forecastHourly"]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_nws_grid_url(lat, lon):
+    data = get_nws_point_data(lat, lon)
+    return data["properties"]["forecastGridData"]
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -309,14 +348,6 @@ def fetch_nws_hourly_dataframe(lat, lon):
         dt_obj = parse_iso_to_eastern_naive(p["startTime"])
         wind_low, wind_high = extract_wind_range(p.get("windSpeed"))
 
-        gust_raw = (
-            p.get("windGust")
-            or p.get("wind_gust")
-            or p.get("gust")
-            or p.get("windGustSpeed")
-        )
-        gust_val = extract_single_speed(gust_raw)
-
         rows.append(
             {
                 "dt": dt_obj,
@@ -324,7 +355,6 @@ def fetch_nws_hourly_dataframe(lat, lon):
                 "wind_low_mph": wind_low,
                 "wind_high_mph": wind_high,
                 "wind_dir": p.get("windDirection"),
-                "gust_mph": gust_val,
                 "pop_pct": p.get("probabilityOfPrecipitation", {}).get("value"),
                 "rain_code": infer_rain_bucket(
                     p.get("shortForecast", ""),
@@ -340,6 +370,69 @@ def fetch_nws_hourly_dataframe(lat, lon):
         )
 
     return pd.DataFrame(rows).sort_values("dt").reset_index(drop=True)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_nws_grid_gust_dataframe(lat, lon):
+    """
+    Pull gusts from forecastGridData, expand multi-hour validTime periods into
+    hourly timestamps, and convert km/h to mph.
+    """
+    grid_url = get_nws_grid_url(lat, lon)
+    data = safe_get(grid_url).json()
+    props = data.get("properties", {})
+
+    gust_block = props.get("windGust") or {}
+    values = gust_block.get("values", [])
+
+    rows = []
+    for item in values:
+        valid_time = item.get("validTime")
+        value = item.get("value")
+
+        if not valid_time or value is None:
+            continue
+
+        parts = valid_time.split("/")
+        start_part = parts[0]
+        duration_part = parts[1] if len(parts) > 1 else "PT1H"
+
+        try:
+            start_dt = parse_iso_to_eastern_naive(start_part)
+        except Exception:
+            continue
+
+        total_hours = parse_iso8601_duration_to_hours(duration_part)
+        hour_count = max(1, int(round(total_hours)))
+
+        gust_mph = kmh_to_mph(value)
+        if gust_mph is None:
+            continue
+
+        for i in range(hour_count):
+            rows.append(
+                {
+                    "dt": start_dt + timedelta(hours=i),
+                    "gust_mph": float(gust_mph),
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(columns=["dt", "gust_mph"])
+
+    df = pd.DataFrame(rows)
+    df = df.dropna(subset=["gust_mph"]).copy()
+    if df.empty:
+        return pd.DataFrame(columns=["dt", "gust_mph"])
+
+    df["dt"] = pd.to_datetime(df["dt"])
+    df = (
+        df.groupby("dt", as_index=False)["gust_mph"]
+        .max()
+        .sort_values("dt")
+        .reset_index(drop=True)
+    )
+    return df
 
 
 # -----------------------------
@@ -466,7 +559,52 @@ def summarize_stage(current_stage, tide_phase, selected_date, typical_stage=TYPI
     return text, status
 
 
-def summarize_weather_window(window_df, craft):
+def summarize_gusts_for_window(gust_df, start_dt, end_dt, craft):
+    gust_max = None
+
+    if gust_df is not None and not gust_df.empty:
+        gust_window = gust_df[
+            (gust_df["dt"] >= pd.Timestamp(start_dt)) &
+            (gust_df["dt"] <= pd.Timestamp(end_dt))
+        ].copy()
+
+        if gust_window.empty:
+            padded_start = start_dt - timedelta(minutes=60)
+            padded_end = end_dt + timedelta(minutes=60)
+            gust_window = gust_df[
+                (gust_df["dt"] >= pd.Timestamp(padded_start)) &
+                (gust_df["dt"] <= pd.Timestamp(padded_end))
+            ].copy()
+
+        if not gust_window.empty:
+            gust_vals = pd.to_numeric(gust_window["gust_mph"], errors="coerce").dropna()
+            if not gust_vals.empty:
+                gust_max = int(round(gust_vals.max()))
+
+    if gust_max is None:
+        gust_text = "None Reported"
+        gust_status = "GO"
+    else:
+        gust_text = f"{gust_max} mph"
+
+        if craft == "CRUISER - POTOMAC":
+            yellow_gust = 20
+            red_gust = 29
+        else:
+            yellow_gust = 15
+            red_gust = 19
+
+        if gust_max >= red_gust:
+            gust_status = "NO-GO"
+        elif gust_max >= yellow_gust:
+            gust_status = "CAUTION"
+        else:
+            gust_status = "GO"
+
+    return gust_text, gust_status
+
+
+def summarize_weather_window(window_df, craft, gust_df, start_dt, end_dt):
     if window_df.empty:
         raise ValueError("No hourly forecast rows found for the selected date/time window.")
 
@@ -485,27 +623,7 @@ def summarize_weather_window(window_df, craft):
     wind_text = f"{range_text(wind_min, wind_max, ' mph')}, {wind_dir_text}"
     wind_status = "CAUTION" if (wind_max is not None and wind_max >= 18) else "GO"
 
-    gust_vals = pd.to_numeric(window_df["gust_mph"], errors="coerce").dropna()
-    gust_max = int(gust_vals.max()) if not gust_vals.empty else None
-
-    if gust_max is None:
-        gust_text = "None Reported"
-        gust_status = "GO"
-    else:
-        gust_text = f"{gust_max} mph"
-        if craft == "CRUISER - POTOMAC":
-            yellow_gust = 20
-            red_gust = 29
-        else:
-            yellow_gust = 15
-            red_gust = 19
-
-        if gust_max >= red_gust:
-            gust_status = "NO-GO"
-        elif gust_max >= yellow_gust:
-            gust_status = "CAUTION"
-        else:
-            gust_status = "GO"
+    gust_text, gust_status = summarize_gusts_for_window(gust_df, start_dt, end_dt, craft)
 
     pop_series = window_df["pop_pct"].dropna()
     pop_max = int(pop_series.max()) if not pop_series.empty else 0
@@ -641,6 +759,7 @@ elif st.session_state.slide == 3:
 
                     with st.spinner("Retrieving forecast data..."):
                         weather_df = fetch_nws_hourly_dataframe(LAT, LON)
+                        gust_df = fetch_nws_grid_gust_dataframe(LAT, LON)
 
                         window_df = weather_df[
                             (weather_df["dt"] >= start_dt) &
@@ -656,7 +775,13 @@ elif st.session_state.slide == 3:
                         current_stage = fetch_usgs_current_stage()
 
                     confidence_text, confidence_status = summarize_forecast_confidence(selected_date)
-                    weather = summarize_weather_window(window_df, st.session_state.craft)
+                    weather = summarize_weather_window(
+                        window_df=window_df,
+                        craft=st.session_state.craft,
+                        gust_df=gust_df,
+                        start_dt=start_dt,
+                        end_dt=end_dt,
+                    )
                     tide_text, tide_status, tide_phase = summarize_tides(tides_df, start_dt, end_dt)
                     stage_text, stage_status = summarize_stage(current_stage, tide_phase, selected_date)
 
