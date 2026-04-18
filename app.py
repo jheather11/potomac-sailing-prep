@@ -339,9 +339,7 @@ def fetch_nws_hourly_dataframe(lat, lon):
             }
         )
 
-    df = pd.DataFrame(rows).sort_values("dt").reset_index(drop=True)
-    df["dt_hour"] = df["dt"].dt.floor("h")
-    return df
+    return pd.DataFrame(rows).sort_values("dt").reset_index(drop=True)
 
 
 # -----------------------------
@@ -349,19 +347,12 @@ def fetch_nws_hourly_dataframe(lat, lon):
 # -----------------------------
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_ndfd_gust_dataframe(lat, lon, start_dt, end_dt):
-    """
-    Pull a slightly wider window than the requested sail window so we do not
-    miss gust values that are timestamped just outside the selected hours.
-    """
-    padded_start = start_dt - pd.Timedelta(hours=3)
-    padded_end = end_dt + pd.Timedelta(hours=3)
-
     params = {
         "lat": lat,
         "lon": lon,
         "product": "time-series",
-        "begin": padded_start.strftime("%Y-%m-%dT%H:%M:%S"),
-        "end": padded_end.strftime("%Y-%m-%dT%H:%M:%S"),
+        "begin": (start_dt - pd.Timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S"),
+        "end": (end_dt + pd.Timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S"),
         "Unit": "e",
         "wgust": "wgust",
     }
@@ -386,8 +377,7 @@ def fetch_ndfd_gust_dataframe(lat, lon, start_dt, end_dt):
     gust_rows = []
 
     for elem in root.iter():
-        lname = xml_localname(elem.tag)
-        if lname != "wind-speed":
+        if xml_localname(elem.tag) != "wind-speed":
             continue
 
         elem_type = (elem.attrib.get("type") or "").strip().lower()
@@ -402,41 +392,29 @@ def fetch_ndfd_gust_dataframe(lat, lon, start_dt, end_dt):
             elif child_name == "time-layout":
                 layout_key = (child.text or "").strip()
             elif child_name == "value":
-                # Handles both normal numeric values and empty/nil values
                 values.append(parse_numeric(child.text))
 
-        is_gust = (elem_type == "gust") or ("gust" in name_text)
+        # When only wgust is requested, some XML responses may still vary a bit in labels.
+        is_gust = (elem_type == "gust") or ("gust" in name_text) or (elem_type == "" and layout_key in time_layouts)
+
         if not is_gust or not layout_key or layout_key not in time_layouts:
             continue
 
         times = time_layouts[layout_key]
         for dt_obj, gust_val in zip(times, values):
-            gust_rows.append({"dt": dt_obj, "gust_mph": gust_val})
+            if gust_val is not None:
+                gust_rows.append({"dt": dt_obj, "gust_mph": float(gust_val)})
 
     if not gust_rows:
-        return pd.DataFrame(columns=["dt", "dt_hour", "gust_mph"])
+        return pd.DataFrame(columns=["dt", "gust_mph"])
 
     df = pd.DataFrame(gust_rows)
-    df = df.dropna(subset=["gust_mph"]).copy()
-    if df.empty:
-        return pd.DataFrame(columns=["dt", "dt_hour", "gust_mph"])
+    df = df.dropna(subset=["gust_mph"])
+    df = df.sort_values("dt").reset_index(drop=True)
 
-    df["gust_mph"] = pd.to_numeric(df["gust_mph"], errors="coerce")
-    df = df.dropna(subset=["gust_mph"]).copy()
-    df["dt_hour"] = df["dt"].dt.floor("h")
-
-    # Keep the max gust inside each local hour bucket.
-    hourly = (
-        df.groupby("dt_hour", as_index=False)["gust_mph"]
-        .max()
-        .sort_values("dt_hour")
-        .reset_index(drop=True)
-    )
-
-    # Preserve representative datetime for nearest-time fallback work.
-    hourly["dt"] = hourly["dt_hour"]
-
-    return hourly[["dt", "dt_hour", "gust_mph"]]
+    # Deduplicate by timestamp, keeping the highest gust if duplicates exist
+    df = df.groupby("dt", as_index=False)["gust_mph"].max()
+    return df
 
 
 # -----------------------------
@@ -563,27 +541,20 @@ def summarize_stage(current_stage, tide_phase, selected_date, typical_stage=TYPI
     return text, status
 
 
-def summarize_weather_window(window_df, craft):
-    if window_df.empty:
-        raise ValueError("No hourly forecast rows found for the selected date/time window.")
+def summarize_gusts_for_window(gust_df, start_dt, end_dt, craft):
+    if gust_df is None or gust_df.empty:
+        gust_max = None
+    else:
+        gust_window = gust_df[(gust_df["dt"] >= start_dt) & (gust_df["dt"] <= end_dt)].copy()
 
-    temp_min = int(window_df["temp_f"].min()) if window_df["temp_f"].notna().any() else None
-    temp_max = int(window_df["temp_f"].max()) if window_df["temp_f"].notna().any() else None
-    temp_text = range_text(temp_min, temp_max, "F")
-    temp_status = "GO" if (temp_max is not None and temp_max >= 45) else "CAUTION"
+        # Fallback: if no rows land exactly in the selected window, use nearest nearby gust rows
+        if gust_window.empty:
+            padded_start = start_dt - pd.Timedelta(minutes=90)
+            padded_end = end_dt + pd.Timedelta(minutes=90)
+            gust_window = gust_df[(gust_df["dt"] >= padded_start) & (gust_df["dt"] <= padded_end)].copy()
 
-    low_vals = window_df["wind_low_mph"].dropna().astype(int)
-    high_vals = window_df["wind_high_mph"].dropna().astype(int)
-
-    wind_min = int(low_vals.min()) if not low_vals.empty else None
-    wind_max = int(high_vals.max()) if not high_vals.empty else None
-    wind_dir_text = compact_wind_dir(window_df["wind_dir"].tolist())
-
-    wind_text = f"{range_text(wind_min, wind_max, ' mph')}, {wind_dir_text}"
-    wind_status = "CAUTION" if (wind_max is not None and wind_max >= 18) else "GO"
-
-    gust_vals = pd.to_numeric(window_df["gust_mph"], errors="coerce").dropna()
-    gust_max = int(gust_vals.max()) if not gust_vals.empty else None
+        gust_vals = pd.to_numeric(gust_window["gust_mph"], errors="coerce").dropna() if not gust_window.empty else pd.Series(dtype=float)
+        gust_max = int(gust_vals.max()) if not gust_vals.empty else None
 
     if gust_max is None:
         gust_text = "None Reported"
@@ -603,6 +574,30 @@ def summarize_weather_window(window_df, craft):
             gust_status = "CAUTION"
         else:
             gust_status = "GO"
+
+    return gust_text, gust_status
+
+
+def summarize_weather_window(window_df, craft, gust_df, start_dt, end_dt):
+    if window_df.empty:
+        raise ValueError("No hourly forecast rows found for the selected date/time window.")
+
+    temp_min = int(window_df["temp_f"].min()) if window_df["temp_f"].notna().any() else None
+    temp_max = int(window_df["temp_f"].max()) if window_df["temp_f"].notna().any() else None
+    temp_text = range_text(temp_min, temp_max, "F")
+    temp_status = "GO" if (temp_max is not None and temp_max >= 45) else "CAUTION"
+
+    low_vals = window_df["wind_low_mph"].dropna().astype(int)
+    high_vals = window_df["wind_high_mph"].dropna().astype(int)
+
+    wind_min = int(low_vals.min()) if not low_vals.empty else None
+    wind_max = int(high_vals.max()) if not high_vals.empty else None
+    wind_dir_text = compact_wind_dir(window_df["wind_dir"].tolist())
+
+    wind_text = f"{range_text(wind_min, wind_max, ' mph')}, {wind_dir_text}"
+    wind_status = "CAUTION" if (wind_max is not None and wind_max >= 18) else "GO"
+
+    gust_text, gust_status = summarize_gusts_for_window(gust_df, start_dt, end_dt, craft)
 
     pop_series = window_df["pop_pct"].dropna()
     pop_max = int(pop_series.max()) if not pop_series.empty else 0
@@ -636,38 +631,26 @@ def summarize_weather_window(window_df, craft):
 
 def merge_weather_and_gusts(weather_df, gust_df):
     """
-    Robust gust matching strategy:
-    1) exact match by local hour bucket
-    2) nearest-time fallback with wider tolerance
-
-    This avoids losing gust values when NDFD and NWS do not share identical
-    timestamps but are effectively describing the same forecast hour.
+    Keep a nearest-time merge for any future use, but final gust decision
+    no longer depends on this merge.
     """
-    left = weather_df.sort_values("dt").reset_index(drop=True).copy()
-
     if gust_df.empty:
-        return left
+        return weather_df.copy()
 
+    left = weather_df.sort_values("dt").reset_index(drop=True).copy()
     right = gust_df.sort_values("dt").reset_index(drop=True).copy()
 
-    # First pass: local hour bucket join
-    merged = left.merge(
-        right[["dt_hour", "gust_mph"]].rename(columns={"gust_mph": "gust_mph_hour"}),
-        on="dt_hour",
-        how="left",
-    )
-
-    # Second pass: nearest-time fallback
-    fallback = pd.merge_asof(
-        left[["dt"]].sort_values("dt").reset_index(drop=True),
-        right[["dt", "gust_mph"]].rename(columns={"gust_mph": "gust_mph_nearest"}),
+    merged = pd.merge_asof(
+        left,
+        right[["dt", "gust_mph"]].rename(columns={"gust_mph": "gust_mph_ndfd"}),
         on="dt",
         direction="nearest",
         tolerance=pd.Timedelta("90min"),
     )
 
-    merged["gust_mph"] = merged["gust_mph_hour"].combine_first(fallback["gust_mph_nearest"])
-    merged = merged.drop(columns=["gust_mph_hour"])
+    if "gust_mph_ndfd" in merged.columns:
+        merged["gust_mph"] = merged["gust_mph_ndfd"].combine_first(merged["gust_mph"])
+        merged = merged.drop(columns=["gust_mph_ndfd"])
 
     return merged
 
@@ -793,7 +776,13 @@ elif st.session_state.slide == 3:
                         current_stage = fetch_usgs_current_stage()
 
                     confidence_text, confidence_status = summarize_forecast_confidence(selected_date)
-                    weather = summarize_weather_window(window_df, st.session_state.craft)
+                    weather = summarize_weather_window(
+                        window_df=window_df,
+                        craft=st.session_state.craft,
+                        gust_df=gust_df,
+                        start_dt=start_dt,
+                        end_dt=end_dt,
+                    )
                     tide_text, tide_status, tide_phase = summarize_tides(tides_df, start_dt, end_dt)
                     stage_text, stage_status = summarize_stage(current_stage, tide_phase, selected_date)
 
