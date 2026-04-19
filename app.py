@@ -8,7 +8,7 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Potomac Sail Prep (DCA)", layout="centered")
+st.set_page_config(page_title="Potomac River SCOW Dashboard", layout="centered")
 
 # -----------------------------
 # CONFIG
@@ -29,6 +29,11 @@ HEADERS = {
 
 TYPICAL_STAGE_FT = 3.5
 SHARE_URL = "https://potomac-dca-sailing-prep.streamlit.app/"
+
+DISCLAIMER_TEXT = (
+    "Advisory only • Conditions change rapidly • "
+    "Skipper responsible for vessel operation"
+)
 
 # -----------------------------
 # SESSION STATE
@@ -315,6 +320,189 @@ def kmh_to_mph(value):
     if value is None:
         return None
     return float(value) * 0.621371
+
+
+def has_status(value, target):
+    return target in str(value or "")
+
+
+def extract_first_number(text):
+    match = re.search(r"(-?\d+(?:\.\d+)?)", str(text or ""))
+    return float(match.group(1)) if match else None
+
+
+def get_direction_family(wind_value_text):
+    txt = str(wind_value_text or "").upper()
+    direction_tokens = [
+        "NNE", "ENE", "ESE", "SSE", "SSW", "WSW", "WNW", "NNW",
+        "NE", "SE", "SW", "NW",
+        "N", "E", "S", "W",
+    ]
+    found = []
+    for token in direction_tokens:
+        if re.search(rf"\b{token}\b", txt):
+            found.append(token)
+
+    if not found:
+        return None
+
+    northerly = {"N", "NNE", "NNW", "NE", "NW"}
+    southerly = {"S", "SSE", "SSW", "SE", "SW"}
+    easterly = {"E", "ENE", "ESE", "NE", "SE"}
+    westerly = {"W", "WNW", "WSW", "NW", "SW"}
+
+    if any(token in northerly for token in found):
+        return "N"
+    if any(token in southerly for token in found):
+        return "S"
+    if any(token in easterly for token in found):
+        return "E"
+    if any(token in westerly for token in found):
+        return "W"
+    return found[0]
+
+
+def build_considerations(rows, craft, overall_status):
+    row_lookup = {row["Metric"]: row for row in rows}
+
+    confidence_value = row_lookup.get("Data Confidence", {}).get("Value", "")
+    wind_value = row_lookup.get("Wind", {}).get("Value", "")
+    wind_status = row_lookup.get("Wind", {}).get("Status", "")
+    gust_value = row_lookup.get("Gusts", {}).get("Value", "")
+    gust_status = row_lookup.get("Gusts", {}).get("Status", "")
+    temp_value = row_lookup.get("Temp", {}).get("Value", "")
+    temp_status = row_lookup.get("Temp", {}).get("Status", "")
+    flow_value = row_lookup.get("Flow", {}).get("Value", "")
+    flow_status = row_lookup.get("Flow", {}).get("Status", "")
+    rain_status = row_lookup.get("Rain", {}).get("Status", "")
+    thunder_status = row_lookup.get("Thunder", {}).get("Status", "")
+
+    notes = []
+
+    wind_dir_family = get_direction_family(wind_value)
+    tide_is_ebb = " / L:" in str(row_lookup.get("Tides", {}).get("Value", "")) or "ebb" in str(flow_value).lower()
+
+    gust_mph = None if "None Reported" in str(gust_value) else extract_first_number(gust_value)
+    wind_max = None
+    wind_nums = [int(x) for x in re.findall(r"\d+", str(wind_value))]
+    if wind_nums:
+        wind_max = max(wind_nums)
+
+    temp_min = None
+    temp_nums = [int(x) for x in re.findall(r"\d+", str(temp_value))]
+    if temp_nums:
+        temp_min = min(temp_nums)
+
+    flow_stage = extract_first_number(flow_value)
+
+    def add_note(priority, text):
+        notes.append({"priority": priority, "text": text})
+
+    # -----------------------------
+    # Highest priority
+    # -----------------------------
+    if has_status(thunder_status, "NO-GO"):
+        add_note(100, "⚠️ Thunder risk present. Review radar and exit options.")
+
+    if craft == "FLYING SCOT - POTOMAC":
+        if has_status(gust_status, "NO-GO"):
+            add_note(95, "⚠️ Strong gusts may increase heel / capsize risk.")
+        elif has_status(gust_status, "CAUTION"):
+            add_note(80, "⚠️ Gusts may require active sail management.")
+    else:
+        if has_status(gust_status, "NO-GO"):
+            add_note(95, "⚠️ Strong gusts may complicate docking and control.")
+        elif has_status(gust_status, "CAUTION"):
+            add_note(80, "⚠️ Gusty conditions may affect close-quarters handling.")
+
+    if has_status(rain_status, "CAUTION"):
+        add_note(75, "⚠️ Reduced visibility may affect traffic awareness and docking.")
+
+    # -----------------------------
+    # Wind-based craft guidance
+    # -----------------------------
+    if craft == "FLYING SCOT - POTOMAC":
+        if wind_max is not None and wind_max >= 15:
+            add_note(78, "⚠️ Fresh breeze may favor reefing or reduced sail.")
+        if wind_max is not None and wind_max >= 18:
+            add_note(77, "⚠️ Reefing before departure may be easier than underway.")
+    else:
+        if wind_max is not None and wind_max >= 16:
+            add_note(76, "⚠️ Fresh breeze may increase docking drift.")
+
+    # -----------------------------
+    # Temperature / immersion
+    # -----------------------------
+    if has_status(temp_status, "CAUTION") or (temp_min is not None and temp_min < 50):
+        add_note(72, "⚠️ Cold conditions increase consequence of immersion.")
+
+    # -----------------------------
+    # Flow / tide / return trip
+    # -----------------------------
+    if has_status(flow_status, "NO-GO"):
+        add_note(90, "⚠️ Elevated river level may increase maneuvering difficulty.")
+    elif "Low water + ebb" in str(flow_value):
+        if craft == "FLYING SCOT - POTOMAC":
+            add_note(74, "⚠️ Low water and ebb may increase shallow-area risk near slips.")
+        else:
+            add_note(74, "⚠️ Low water may reduce margin outside marked channels.")
+    elif "Low water" in str(flow_value):
+        if craft == "FLYING SCOT - POTOMAC":
+            add_note(70, "⚠️ Low water may increase shallow-area risk near slips.")
+        else:
+            add_note(70, "⚠️ Low water may reduce margin outside marked channels.")
+    elif has_status(flow_status, "CAUTION"):
+        add_note(69, "⚠️ River current may increase maneuvering difficulty.")
+
+    if (
+        wind_dir_family == "N"
+        and tide_is_ebb
+        and (
+            (gust_mph is not None and gust_mph >= 15) or
+            (wind_max is not None and wind_max >= 12)
+        )
+    ):
+        add_note(73, "⚠️ Return trip may be slower against current and wind.")
+
+    # -----------------------------
+    # Craft-specific docking / launch handling
+    # -----------------------------
+    if craft == "FLYING SCOT - POTOMAC":
+        if (
+            (gust_mph is not None and gust_mph >= 15) or
+            (wind_max is not None and wind_max >= 15)
+        ):
+            add_note(68, "⚠️ Launching or retrieval may require extra caution.")
+    else:
+        if (
+            (gust_mph is not None and gust_mph >= 20) or
+            (wind_max is not None and wind_max >= 16)
+        ):
+            add_note(68, "⚠️ Keelboat freeboard may increase sideways drift while docking.")
+
+    # -----------------------------
+    # Confidence
+    # -----------------------------
+    if "LOW" in str(confidence_value):
+        add_note(60, "⚠️ Forecast confidence is lower. Recheck closer to departure.")
+    elif "MEDIUM" in str(confidence_value) and overall_status != "NO-GO":
+        add_note(55, "⚠️ Forecast confidence is moderate. Recheck day-of-sail.")
+
+    # -----------------------------
+    # Fallback GO language
+    # -----------------------------
+    if not notes:
+        return ["✅ No significant operational concerns detected."]
+
+    deduped = []
+    seen = set()
+    for item in sorted(notes, key=lambda x: x["priority"], reverse=True):
+        text = item["text"]
+        if text not in seen:
+            deduped.append(text)
+            seen.add(text)
+
+    return deduped[:3]
 
 
 # -----------------------------
@@ -675,6 +863,13 @@ div.stButton > button {
     height: 3em;
     font-weight: 600;
 }
+.dashboard-disclaimer {
+    font-size: 0.92rem;
+    color: rgba(49, 51, 63, 0.78);
+    margin-top: -0.45rem;
+    margin-bottom: 1rem;
+    line-height: 1.35;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -684,7 +879,8 @@ div.stButton > button {
 # SLIDE 1
 # -----------------------------
 if st.session_state.slide == 1:
-    st.title("⛵ Potomac Sail Prep (DCA)")
+    st.title("⛵ POTOMAC RIVER SCOW DASHBOARD")
+    st.markdown(f'<div class="dashboard-disclaimer">{DISCLAIMER_TEXT}</div>', unsafe_allow_html=True)
     st.markdown("### Select Your Craft")
 
     col1, col2 = st.columns(2)
@@ -705,7 +901,9 @@ if st.session_state.slide == 1:
 # SLIDE 2
 # -----------------------------
 elif st.session_state.slide == 2:
-    st.title(f"Logistics: {st.session_state.craft.split(' - ')[0].title()}")
+    st.title("POTOMAC RIVER SCOW DASHBOARD")
+    st.markdown(f'<div class="dashboard-disclaimer">{DISCLAIMER_TEXT}</div>', unsafe_allow_html=True)
+    st.markdown(f"### Logistics: {st.session_state.craft.split(' - ')[0].title()}")
     st.info("Check official SCOW sources before proceeding.")
 
     st.markdown(
@@ -737,7 +935,9 @@ elif st.session_state.slide == 2:
 # SLIDE 3
 # -----------------------------
 elif st.session_state.slide == 3:
-    st.title("Float Plan")
+    st.title("POTOMAC RIVER SCOW DASHBOARD")
+    st.markdown(f'<div class="dashboard-disclaimer">{DISCLAIMER_TEXT}</div>', unsafe_allow_html=True)
+    st.markdown("### Float Plan")
 
     selected_date = st.date_input("Select Date", value=date.today())
     start_time = st.time_input("Start Time", value=time(13, 0), step=3600)
@@ -807,7 +1007,11 @@ elif st.session_state.slide == 3:
                     ]
                     overall = overall_decision(statuses)
 
-                    updated_text = datetime.now(EASTERN_TZ).strftime("%A, %Y-%m-%d, %-I:%M %p EDT")
+                    try:
+                        updated_text = datetime.now(EASTERN_TZ).strftime("%A, %Y-%m-%d, %-I:%M %p EDT")
+                    except Exception:
+                        updated_text = datetime.now(EASTERN_TZ).strftime("%A, %Y-%m-%d, %I:%M %p EDT").lstrip("0")
+
                     st.session_state.forecast_rows = rows
                     st.session_state.overall_status = overall
                     st.session_state.briefing_meta = {
@@ -830,7 +1034,9 @@ elif st.session_state.slide == 3:
 elif st.session_state.slide == 4:
     meta = st.session_state.briefing_meta or {}
 
-    st.title(f"Briefing: {meta.get('craft', 'Craft').split(' - ')[0].title()}")
+    st.title("POTOMAC RIVER SCOW DASHBOARD")
+    st.markdown(f'<div class="dashboard-disclaimer">{DISCLAIMER_TEXT}</div>', unsafe_allow_html=True)
+    st.markdown(f"### Briefing: {meta.get('craft', 'Craft').split(' - ')[0].title()}")
     st.write(
         f"**Date:** {meta.get('selected_weekday', '')}, {meta.get('selected_date', '')}  \n"
         f"**Window:** {meta.get('start_time', '')} to {meta.get('end_time', '')} EDT  \n"
@@ -841,56 +1047,16 @@ elif st.session_state.slide == 4:
     rows = st.session_state.forecast_rows or []
     render_briefing_table(rows)
 
-    st.markdown("### Considerations")
+    st.markdown("### SCOW Considerations")
 
-    notes = []
-    row_lookup = {row["Metric"]: row for row in rows}
-
-    confidence_value = row_lookup.get("Data Confidence", {}).get("Value", "")
-    thunder_status = row_lookup.get("Thunder", {}).get("Status", "")
-    wind_status = row_lookup.get("Wind", {}).get("Status", "")
-    gust_status = row_lookup.get("Gusts", {}).get("Status", "")
-    flow_status = row_lookup.get("Flow", {}).get("Status", "")
-    flow_value = row_lookup.get("Flow", {}).get("Value", "")
-    rain_status = row_lookup.get("Rain", {}).get("Status", "")
-
-    if "MEDIUM" in confidence_value:
-        notes.append("Data confidence is moderate — check all forecasts day of sail.")
-    elif "LOW" in confidence_value:
-        notes.append("Data confidence is low — do not rely on this forecast alone; recheck closer to sail time.")
-
-    if "NO-GO" in thunder_status:
-        notes.append("General Safety: Thunder appears in the selected forecast window.")
-
-    if "NO-GO" in gust_status:
-        notes.append("Gusts: Peak gusts are in the no-go range for this craft.")
-    elif "CAUTION" in gust_status:
-        notes.append("Gusts: Peak gusts are in the caution range for this craft.")
-
-    if "CAUTION" in wind_status:
-        notes.append("Wind: Sustained winds may still create chop, especially on wider river sections.")
-
-    if "NO-GO" in flow_status:
-        notes.append("River level: Little Falls stage is very high.")
-    elif "CAUTION" in flow_status:
-        if "Low water + ebb" in flow_value:
-            notes.append("River level: Low water combined with ebb tide may increase grounding risk and make handling trickier in shallow areas.")
-        elif "Low water" in flow_value:
-            notes.append("River level: Low water may reduce depth margins in shallow areas.")
-        else:
-            notes.append("River level: Little Falls stage is elevated above typical easy conditions.")
-
-    if "check online" in flow_value:
-        notes.append("Flow: This is an observed stage, not a true multi-day flow forecast — check online closer to sail time.")
-
-    if "CAUTION" in rain_status:
-        notes.append("Rain: Showers or elevated precipitation chances may reduce comfort and visibility.")
-
-    if not notes:
-        notes.append("Conditions look generally favorable across the selected metrics.")
+    notes = build_considerations(
+        rows=rows,
+        craft=meta.get("craft", st.session_state.craft or ""),
+        overall_status=st.session_state.overall_status or "GO",
+    )
 
     for note in notes:
-        st.markdown(f"- {note}")
+        st.markdown(note)
 
     st.markdown("---")
     st.markdown("### Share This Tool")
